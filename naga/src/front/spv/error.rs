@@ -172,7 +172,7 @@ impl Error {
 
     pub fn emit_to_string(&self, source: &str) -> String {
         let mut writer = crate::error::DiagnosticBuffer::new();
-        self.emit_to_writer(writer.inner_mut(), source);
+        self.emit_to_writer(&mut writer.writer(), source);
         writer.into_string()
     }
 }

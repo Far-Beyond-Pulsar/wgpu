@@ -1,3 +1,11 @@
+// We deliberately continue to use `#![no_std]` for most of the crate,
+// but our diagnostics code needs access to the standard library in order to
+// satisfy the various writer traits that `codespan_reporting::term::emit`
+// may demand.  `extern crate std` brings the `std` crate into scope even when
+// `#![no_std]` is present; the path `std::io` can then be referenced without
+// `#[cfg]` guards.
+extern crate std;
+
 use alloc::{borrow::Cow, boxed::Box, string::String};
 use core::{error::Error, fmt};
 
@@ -46,8 +54,9 @@ impl fmt::Display for ShaderError<crate::WithSpan<crate::valid::ValidationError>
 
         let writer = {
             let mut writer = DiagnosticBuffer::new();
+            let mut w = writer.writer();
             term::emit(
-                writer.inner_mut(),
+                &mut w,
                 &config,
                 &files,
                 &self.inner.diagnostic(),
@@ -62,7 +71,7 @@ impl fmt::Display for ShaderError<crate::WithSpan<crate::valid::ValidationError>
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "termcolor")] {
-        type DiagnosticBufferInner = codespan_reporting::term::termcolor::NoColor<alloc::vec::Vec<u8>>;
+        type DiagnosticBufferInner = termcolor::NoColor<alloc::vec::Vec<u8>>;
         pub(crate) use codespan_reporting::term::termcolor::WriteColor as _ErrorWrite;
     } else if #[cfg(feature = "stderr")] {
         type DiagnosticBufferInner = alloc::vec::Vec<u8>;
@@ -98,7 +107,7 @@ impl DiagnosticBuffer {
     pub fn new() -> Self {
         cfg_if::cfg_if! {
             if #[cfg(feature = "termcolor")] {
-                let inner = codespan_reporting::term::termcolor::NoColor::new(alloc::vec::Vec::new());
+                let inner = termcolor::NoColor::new(alloc::vec::Vec::new());
             } else if #[cfg(feature = "stderr")] {
                 let inner = alloc::vec::Vec::new();
             } else {
@@ -128,78 +137,6 @@ impl DiagnosticBuffer {
     }
 }
 
-// When neither `termcolor` nor `stderr` features are enabled, the
-// `DiagnosticBufferInner` aliases to `String` or `Vec<u8>` earlier in this
-// file.  Unfortunately `codespan_reporting::term::emit` always expects a
-// writer implementing `termcolor::WriteColor`, so the default choices were
-// causing the downstream build to fail with errors like:
-//
-// ```text
-// error[E0277]: the trait bound `std::string::String: WriteColor` is not satisfied
-// ```
-//
-// The original intent of the feature-gated type alias was to avoid pulling in
-// the `termcolor` dependency when coloured output was unnecessary.  However
-// `codespan-reporting` re-exports the `WriteColor` trait even without the
-// `termcolor` feature, so we can provide a trivial no‑op implementation that
-// simply forwards to the underlying `fmt::Write` or `io::Write` behaviour.  In
-// practice the writer never needs to change colours when emitting to an
-// in‑memory buffer, so the methods can all return `Ok(())` and `supports_color`
-// returns `false`.
-//
-// We implement both `String` and `Vec<u8>` since the latter is used when the
-// `stderr` feature is enabled (which also avoids a `termcolor` dependency).  By
-// placing the impls in a `cfg` block we ensure they are only compiled in the
-// configurations where the types actually exist.
-
-// The implementations mirror the ones already provided for other writer types in
-// the `termcolor` crate; they are intentionally small and perform no actual
-// colouring.
-
-// Note that we don't gate the module on `feature = "termcolor"` because we
-// still need these impls when the feature is *disabled* (which is the only
-// situation where the default aliases point at `String`/`Vec<u8>`).
-
-// Only compile these implementations when the `termcolor` feature is enabled
-// for naga.  In that configuration `codespan_reporting::term::emit` requires a
-// writer implementing `termcolor::WriteColor`, and neither `String` nor
-// `Vec<u8>` satisfy the trait.  Providing a trivial `WriteColor` implementation
-// avoids errors when the diagnostic buffer falls back to the simpler types.
-#[cfg(feature = "termcolor")]
-mod write_color_impls {
-    use super::*;
-    use alloc::vec::Vec;
-    use codespan_reporting::term::termcolor::{ColorSpec, WriteColor};
-    use std::io;
-
-    impl WriteColor for String {
-        fn supports_color(&self) -> bool {
-            false
-        }
-
-        fn set_color(&mut self, _spec: &ColorSpec) -> io::Result<()> {
-            Ok(())
-        }
-
-        fn reset(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl WriteColor for Vec<u8> {
-        fn supports_color(&self) -> bool {
-            false
-        }
-
-        fn set_color(&mut self, _spec: &ColorSpec) -> io::Result<()> {
-            Ok(())
-        }
-
-        fn reset(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-}
 
 impl<E> Error for ShaderError<E>
 where
@@ -208,6 +145,100 @@ where
 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         self.inner.source()
+    }
+}
+
+/// Adapt the internal buffer to whatever writer interface `codespan_reporting`
+/// requires.  The diagnostics crate's `term::emit` function is compiled with
+/// different signatures depending on its features; we make our wrapper
+/// implement *all* of the possibilities so that callers can always pass it
+/// directly without worrying about which one will be chosen.
+#[derive(Debug)]
+pub(crate) struct DiagnosticBufferWriter<'a> {
+    inner: &'a mut DiagnosticBufferInner,
+}
+
+impl<'a> DiagnosticBufferWriter<'a> {
+    pub(crate) fn new(inner: &'a mut DiagnosticBufferInner) -> Self {
+        Self { inner }
+    }
+}
+
+// `termcolor` is pulled in either via naga's own feature or indirectly when
+// *codespan-reporting* enables its `termcolor` feature.  Having it as a normal
+// dependency means the trait is always in scope and we can implement it
+// unconditionally.
+use termcolor::{ColorSpec, WriteColor};
+
+impl<'a> WriteColor for DiagnosticBufferWriter<'a> {
+    fn supports_color(&self) -> bool {
+        false
+    }
+
+    fn set_color(&mut self, _spec: &ColorSpec) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn reset(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+// `std::io::Write` may be required even in a `#![no_std]` build because
+// `codespan-reporting` could be compiled with `std`.  We unconditionally
+// implement the trait and perform conversions depending on what the inner
+// buffer actually is.
+impl<'a> std::io::Write for DiagnosticBufferWriter<'a> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // The concrete type of `DiagnosticBufferInner` depends on which features are
+        // active.  When `termcolor` is present (regardless of `stderr`) it is
+        // `NoColor<Vec<u8>>`.  Otherwise `stderr` yields `Vec<u8>` and the
+        // no‑feature case uses `String`.  We use `cfg_if` to handle each case
+        // correctly without duplicating the outer logic.
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "termcolor")] {
+                // inner is NoColor<Vec<u8>>
+                self.inner.get_mut().extend_from_slice(buf);
+            } else if #[cfg(feature = "stderr")] {
+                // inner is Vec<u8>
+                self.inner.extend_from_slice(buf);
+            } else {
+                // inner is String
+                let s = std::str::from_utf8(buf)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                self.inner.push_str(s);
+            }
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+// Finally, support the fmt::Write case for true no-std builds with neither
+// `std` nor `termcolor` available.
+impl<'a> fmt::Write for DiagnosticBufferWriter<'a> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "termcolor")] {
+                self.inner.get_mut().extend_from_slice(s.as_bytes());
+            } else if #[cfg(feature = "stderr")] {
+                self.inner.extend_from_slice(s.as_bytes());
+            } else {
+                self.inner.push_str(s);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl DiagnosticBuffer {
+    /// Create a writer adaptor suitable for passing to
+    /// `codespan_reporting::term::emit`.
+    pub fn writer(&mut self) -> DiagnosticBufferWriter<'_> {
+        DiagnosticBufferWriter::new(self.inner_mut())
     }
 }
 
