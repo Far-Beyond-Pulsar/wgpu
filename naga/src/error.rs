@@ -160,9 +160,15 @@ impl DiagnosticBuffer {
 // still need these impls when the feature is *disabled* (which is the only
 // situation where the default aliases point at `String`/`Vec<u8>`).
 
-#[cfg(not(feature = "termcolor"))]
+// Only compile these implementations when the `termcolor` feature is enabled
+// for naga.  In that configuration `codespan_reporting::term::emit` requires a
+// writer implementing `termcolor::WriteColor`, and neither `String` nor
+// `Vec<u8>` satisfy the trait.  Providing a trivial `WriteColor` implementation
+// avoids errors when the diagnostic buffer falls back to the simpler types.
+#[cfg(feature = "termcolor")]
 mod write_color_impls {
     use super::*;
+    use alloc::vec::Vec;
     use codespan_reporting::term::termcolor::{ColorSpec, WriteColor};
     use std::io;
 
