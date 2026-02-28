@@ -128,6 +128,73 @@ impl DiagnosticBuffer {
     }
 }
 
+// When neither `termcolor` nor `stderr` features are enabled, the
+// `DiagnosticBufferInner` aliases to `String` or `Vec<u8>` earlier in this
+// file.  Unfortunately `codespan_reporting::term::emit` always expects a
+// writer implementing `termcolor::WriteColor`, so the default choices were
+// causing the downstream build to fail with errors like:
+//
+// ```text
+// error[E0277]: the trait bound `std::string::String: WriteColor` is not satisfied
+// ```
+//
+// The original intent of the feature-gated type alias was to avoid pulling in
+// the `termcolor` dependency when coloured output was unnecessary.  However
+// `codespan-reporting` re-exports the `WriteColor` trait even without the
+// `termcolor` feature, so we can provide a trivial no‑op implementation that
+// simply forwards to the underlying `fmt::Write` or `io::Write` behaviour.  In
+// practice the writer never needs to change colours when emitting to an
+// in‑memory buffer, so the methods can all return `Ok(())` and `supports_color`
+// returns `false`.
+//
+// We implement both `String` and `Vec<u8>` since the latter is used when the
+// `stderr` feature is enabled (which also avoids a `termcolor` dependency).  By
+// placing the impls in a `cfg` block we ensure they are only compiled in the
+// configurations where the types actually exist.
+
+// The implementations mirror the ones already provided for other writer types in
+// the `termcolor` crate; they are intentionally small and perform no actual
+// colouring.
+
+// Note that we don't gate the module on `feature = "termcolor"` because we
+// still need these impls when the feature is *disabled* (which is the only
+// situation where the default aliases point at `String`/`Vec<u8>`).
+
+#[cfg(not(feature = "termcolor"))]
+mod write_color_impls {
+    use super::*;
+    use codespan_reporting::term::termcolor::{ColorSpec, WriteColor};
+    use std::io;
+
+    impl WriteColor for String {
+        fn supports_color(&self) -> bool {
+            false
+        }
+
+        fn set_color(&mut self, _spec: &ColorSpec) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn reset(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl WriteColor for Vec<u8> {
+        fn supports_color(&self) -> bool {
+            false
+        }
+
+        fn set_color(&mut self, _spec: &ColorSpec) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn reset(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+}
+
 impl<E> Error for ShaderError<E>
 where
     ShaderError<E>: fmt::Display,
