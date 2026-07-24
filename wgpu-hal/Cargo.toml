@@ -107,7 +107,9 @@ vulkan = [
     "dep:smallvec",
     "dep:windows",
     "gpu-allocator/vulkan",
-    "windows/Win32",
+    "windows/Win32_Foundation",
+    "windows/Win32_Graphics_Dxgi",
+    "windows/Win32_UI_WindowsAndMessaging",
 ]
 gles = [
     "naga/glsl-out",
@@ -260,8 +262,8 @@ wayland-sys = { version = "0.31.3", features = [
 
 [target.'cfg(windows)'.dependencies]
 # Backend: Dx12 and GLES
-windows = { workspace = true, optional = true }
-windows-core = { workspace = true, optional = true }
+windows = { version = "0.62.2", default-features = false, optional = true }
+windows-core = { version = "0.62.2", default-features = false, optional = true }
 # Backend: Dx12
 bit-set = { workspace = true, optional = true }
 range-alloc = { workspace = true, optional = true }
