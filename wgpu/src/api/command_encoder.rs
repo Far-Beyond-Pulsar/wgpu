@@ -63,6 +63,19 @@ impl CommandEncoder {
         CommandBuffer { buffer, actions }
     }
 
+    /// Asks for the command buffer this encoder finishes into to be reusable
+    /// (see [`CommandBuffer::into_reusable`]). Call it before recording.
+    /// Returns `false` when the backend cannot resubmit command buffers.
+    ///
+    /// HELIO PATCH: not part of upstream wgpu.
+    pub fn mark_reusable(&mut self) -> bool {
+        #[cfg(wgpu_core)]
+        if let Some(core) = self.inner.as_core_opt() {
+            return core.context.command_encoder_mark_reusable(core);
+        }
+        false
+    }
+
     /// Begins recording of a render pass.
     ///
     /// This function returns a [`RenderPass`] object which records a single render pass.

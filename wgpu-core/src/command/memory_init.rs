@@ -28,7 +28,7 @@ pub(crate) struct TextureSurfaceDiscard {
 
 pub(crate) type SurfacesInDiscardState = Vec<TextureSurfaceDiscard>;
 
-#[derive(Default)]
+#[derive(Clone, Default)] // HELIO PATCH: Clone, for reusable command buffers
 pub(crate) struct CommandBufferTextureMemoryActions {
     /// The tracker actions that we need to be executed before the command
     /// buffer is executed.

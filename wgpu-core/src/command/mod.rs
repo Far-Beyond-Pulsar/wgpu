@@ -24,6 +24,7 @@ mod query;
 mod ray_tracing;
 mod render;
 mod render_command;
+mod reusable;
 mod timestamp_writes;
 mod transfer;
 mod transition_resources;
@@ -85,6 +86,9 @@ pub use self::{compute_command::ComputeCommand, render_command::RenderCommand};
 
 pub(crate) use timestamp_writes::ArcPassTimestampWrites;
 pub use timestamp_writes::PassTimestampWrites;
+// HELIO PATCH: reusable command buffers.
+pub use self::reusable::{MixedSubmission, ReusableCommandBuffer, ReusableCommandBufferError};
+pub(crate) use self::reusable::ReusableCommands;
 
 use crate::binding_model::BindingError;
 use crate::device::queue::TempResource;
@@ -628,6 +632,10 @@ pub(crate) struct InnerCommandEncoder {
     pub(crate) api: EncodingApi,
 
     pub(crate) label: String,
+
+    /// HELIO PATCH: true once `raw` was switched to reusable command
+    /// buffers. The pooled encoder is switched back before it is released.
+    pub(crate) reusable: bool,
 }
 
 impl InnerCommandEncoder {
@@ -816,6 +824,11 @@ impl Drop for InnerCommandEncoder {
         unsafe {
             self.raw.reset_all(mem::take(&mut self.list));
         }
+        // HELIO PATCH: the allocator hands this encoder to the next user, who
+        // expects single-use command buffers.
+        if self.reusable {
+            unsafe { self.raw.set_reusable(false) };
+        }
         // SAFETY: We are in the Drop impl and we don't use self.raw anymore after this point.
         let raw = unsafe { ManuallyDrop::take(&mut self.raw) };
         self.device.command_allocator.release_encoder(raw);
@@ -927,6 +940,7 @@ impl CommandEncoder {
                         is_open: false,
                         api: EncodingApi::Undecided,
                         label: label.to_string(),
+                        reusable: false,
                     },
                     trackers: Tracker::new(
                         device.ordered_buffer_usages,

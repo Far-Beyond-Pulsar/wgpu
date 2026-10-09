@@ -119,6 +119,12 @@ impl super::CommandEncoder {
 impl crate::CommandEncoder for super::CommandEncoder {
     type A = super::Api;
 
+    unsafe fn set_reusable(&mut self, reusable: bool) -> bool {
+        // HELIO PATCH: see `crate::CommandEncoder::set_reusable`.
+        self.reusable = reusable;
+        true
+    }
+
     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
         if self.free.is_empty() {
             let vk_info = vk::CommandBufferAllocateInfo::default()
@@ -142,8 +148,11 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.rpass_debug_marker_active = false;
         self.end_of_pass_timer_query = None;
 
-        let vk_info = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        let vk_info = vk::CommandBufferBeginInfo::default().flags(if self.reusable {
+            vk::CommandBufferUsageFlags::SIMULTANEOUS_USE
+        } else {
+            vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT
+        });
         unsafe { self.device.raw.begin_command_buffer(raw, &vk_info) }
             .map_err(super::map_host_device_oom_err)?;
         self.active = raw;

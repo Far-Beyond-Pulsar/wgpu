@@ -388,6 +388,12 @@ impl super::CommandEncoder {
 impl crate::CommandEncoder for super::CommandEncoder {
     type A = super::Api;
 
+    unsafe fn set_reusable(&mut self, _reusable: bool) -> bool {
+        // HELIO PATCH: closed D3D12 command lists can be executed again, and
+        // this encoder only resets its allocator in `reset_all`.
+        true
+    }
+
     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
         let list = loop {
             if let Some(list) = self.free_lists.pop() {

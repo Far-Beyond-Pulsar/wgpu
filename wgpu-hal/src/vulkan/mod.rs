@@ -1076,6 +1076,11 @@ pub struct CommandEncoder {
     /// and needs to be disabled on renderpass close.
     rpass_debug_marker_active: bool,
 
+    /// HELIO PATCH: when true, command buffers are begun with
+    /// `SIMULTANEOUS_USE` instead of `ONE_TIME_SUBMIT`, so a finished buffer
+    /// may be submitted again, even while an earlier submission is pending.
+    reusable: bool,
+
     /// If set, the end of the next render/compute pass will write a timestamp at
     /// the given pool & location.
     end_of_pass_timer_query: Option<(vk::QueryPool, u32)>,
@@ -1118,7 +1123,6 @@ impl Drop for CommandEncoder {
         self.counters.command_encoders.sub(1);
     }
 }
-
 impl CommandEncoder {
     /// # Safety
     ///

@@ -353,6 +353,18 @@ pub(crate) struct EncoderInFlight {
     pub(crate) pending_textures: FastHashMap<TrackerIndex, Arc<Texture>>,
     /// These are the BLASes that have been tracked by `PendingWrites`.
     pub(crate) pending_blas_s: FastHashMap<TrackerIndex, Arc<Blas>>,
+
+    /// HELIO PATCH: when this entry is a submission of a reusable command
+    /// buffer, its retained commands. `inner` then holds only the transit
+    /// buffer; the retained raw buffers are submitted right after it, and this
+    /// keeps them, and every resource they use, alive until the GPU is done.
+    pub(crate) reusable: Option<Arc<crate::command::ReusableCommands>>,
+}
+
+/// HELIO PATCH: one entry of [`Queue::submit_items`].
+pub(crate) enum SubmitItem<'a> {
+    Once(Arc<CommandBuffer>),
+    Reusable(&'a crate::command::ReusableCommandBuffer),
 }
 
 /// A private command encoder for writes made directly on the device
@@ -473,6 +485,7 @@ impl PendingWrites {
                     is_open: false,
                     api: crate::command::EncodingApi::InternalUse,
                     label: "(wgpu internal) PendingWrites command encoder".into(),
+                    reusable: false,
                 },
                 trackers: Tracker::new(device.ordered_buffer_usages, device.ordered_texture_usages),
                 temp_resources: mem::take(&mut self.temp_resources),
@@ -482,6 +495,7 @@ impl PendingWrites {
                 pending_buffers,
                 pending_textures,
                 pending_blas_s,
+                reusable: None,
             };
             Ok(Some(encoder))
         } else {
@@ -1349,6 +1363,21 @@ impl Queue {
         &self,
         command_buffers: &[Arc<CommandBuffer>],
     ) -> Result<SubmissionIndex, (SubmissionIndex, QueueSubmitError)> {
+        // HELIO PATCH: normal submission is `submit_items` with only
+        // single-use entries.
+        let items = command_buffers
+            .iter()
+            .map(|command_buffer| SubmitItem::Once(command_buffer.clone()))
+            .collect::<SmallVec<[_; 4]>>();
+        self.submit_items(&items)
+    }
+
+    /// HELIO PATCH: [`Self::submit`], where each entry may also be a
+    /// [`ReusableCommandBuffer`](crate::command::ReusableCommandBuffer).
+    pub(crate) fn submit_items(
+        &self,
+        command_buffers: &[SubmitItem<'_>],
+    ) -> Result<SubmissionIndex, (SubmissionIndex, QueueSubmitError)> {
         profiling::scope!("Queue::submit");
         api_log!("Queue::submit");
 
@@ -1372,7 +1401,86 @@ impl Queue {
                     // a temporary one, since the chains are not finished.
 
                     // finish all the command buffers first
-                    for command_buffer in command_buffers {
+                    for item in command_buffers {
+                        let command_buffer = match item {
+                            SubmitItem::Once(command_buffer) => command_buffer,
+                            SubmitItem::Reusable(reusable) => {
+                                // HELIO PATCH: a fresh transit buffer per
+                                // submission (memory init + barriers from the
+                                // device tracker), then the retained commands.
+                                profiling::scope!("process reusable command buffer");
+                                if first_error.is_some() {
+                                    continue;
+                                }
+                                let commands = &reusable.commands;
+                                let checked = reusable
+                                    .same_device_as(self)
+                                    .map_err(QueueSubmitError::from)
+                                    .and_then(|()| commands.validate(&submission.snatch_guard));
+                                if let Err(err) = checked {
+                                    first_error.get_or_insert(err);
+                                    continue;
+                                }
+
+                                let raw = match self
+                                    .device
+                                    .command_allocator
+                                    .acquire_encoder(self.device.raw(), self.raw())
+                                {
+                                    Ok(raw) => raw,
+                                    Err(e) => break 'error Err(self.device.handle_hal_error(e).into()),
+                                };
+                                let mut transit = crate::command::BakedCommands::reusable_transit(
+                                    raw,
+                                    &self.device,
+                                    commands,
+                                );
+                                if let Err(e) = transit.encoder.open_pass(hal_label(
+                                    Some("(wgpu internal) Reusable transit"),
+                                    self.device.instance_flags,
+                                )) {
+                                    break 'error Err(e.into());
+                                }
+
+                                let mut trackers = self.device.trackers.lock();
+                                if let Err(e) = transit
+                                    .initialize_buffer_memory(&mut trackers, &submission.snatch_guard)
+                                {
+                                    break 'error Err(e.into());
+                                }
+                                if let Err(e) = transit.initialize_texture_memory(
+                                    &mut trackers,
+                                    &self.device,
+                                    &submission.snatch_guard,
+                                ) {
+                                    break 'error Err(e.into());
+                                }
+                                CommandEncoder::insert_barriers_from_device_tracker(
+                                    transit.encoder.raw.as_mut(),
+                                    &mut trackers,
+                                    &commands.trackers,
+                                    &submission.snatch_guard,
+                                );
+                                drop(trackers);
+
+                                if let Err(e) = transit.encoder.close() {
+                                    break 'error Err(e.into());
+                                }
+
+                                submission.executions.push(EncoderInFlight {
+                                    inner: transit.encoder,
+                                    trackers: transit.trackers,
+                                    temp_resources: transit.temp_resources,
+                                    _indirect_draw_validation_resources: transit
+                                        .indirect_draw_validation_resources,
+                                    pending_buffers: FastHashMap::default(),
+                                    pending_textures: FastHashMap::default(),
+                                    pending_blas_s: FastHashMap::default(),
+                                    reusable: Some(commands.clone()),
+                                });
+                                continue;
+                            }
+                        };
                         profiling::scope!("process command buffer");
 
                         // we reset the used surface textures every time we use
@@ -1517,6 +1625,7 @@ impl Queue {
                             pending_buffers: FastHashMap::default(),
                             pending_textures: FastHashMap::default(),
                             pending_blas_s: FastHashMap::default(),
+                            reusable: None,
                         });
                     }
 
@@ -1695,7 +1804,15 @@ impl Queue {
         }
         let hal_command_buffers = executions
             .iter()
-            .flat_map(|e| e.inner.list.iter().map(|b| b.as_ref()))
+            .flat_map(|e| {
+                // HELIO PATCH: a reusable command buffer's retained commands
+                // follow its per-submission transit buffer.
+                e.inner.list.iter().map(|b| b.as_ref()).chain(
+                    e.reusable
+                        .iter()
+                        .flat_map(|r| r.encoder.list.iter().map(|b| b.as_ref())),
+                )
+            })
             .collect::<Vec<_>>();
 
         {
