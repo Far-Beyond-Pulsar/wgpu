@@ -1075,26 +1075,54 @@ unsafe fn insert_or_barrier_update(
         return;
     }
 
-    let update_state_provider = end_state_provider.unwrap_or_else(|| start_state_provider.clone());
     unsafe {
         barrier(
             texture_selector,
             current_state_set,
             index,
-            start_state_provider,
+            start_state_provider.clone(),
             barriers,
             ordered_uses_mask,
         )
     };
-    unsafe {
-        update(
-            texture_selector,
-            start_state,
-            current_state_set,
-            index,
-            update_state_provider,
-        )
-    };
+    let mut start_state = start_state;
+    // HELIO PATCH: `update` fills the start state of subresources this
+    // tracker has not seen yet from the state it is given. With an end state
+    // provider, that must still be the incoming *start* state: a subresource
+    // the incoming tracker first uses one way and leaves another (written,
+    // then read: a mip chain) would otherwise be expected in its end state on
+    // entry, and the transition into this tracker would target the wrong
+    // layout. So the start states are applied first, then the end states.
+    if let Some(end_state_provider) = end_state_provider {
+        unsafe {
+            update(
+                texture_selector,
+                start_state.as_deref_mut(),
+                current_state_set,
+                index,
+                start_state_provider,
+            )
+        };
+        unsafe {
+            update(
+                texture_selector,
+                start_state,
+                current_state_set,
+                index,
+                end_state_provider,
+            )
+        };
+    } else {
+        unsafe {
+            update(
+                texture_selector,
+                start_state,
+                current_state_set,
+                index,
+                start_state_provider,
+            )
+        };
+    }
 }
 
 #[inline(always)]
