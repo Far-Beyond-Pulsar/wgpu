@@ -42,3 +42,28 @@ fn recursive_uncaptured_error() {
 
     assert_eq!(errors_seen.load(Relaxed), 2);
 }
+
+/// HELIO PATCH: handles of separate instances are different handles, though
+/// their ids (unique only within an instance) match.
+#[test]
+fn handles_of_separate_instances_differ() {
+    use std::collections::HashSet;
+
+    // Each `noop` device is the first device of its own instance.
+    let (first, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let (second, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    assert_ne!(first, second);
+    assert_eq!(first, first.clone());
+    let devices: HashSet<_> = [first.clone(), second.clone(), first.clone()].into();
+    assert_eq!(devices.len(), 2);
+
+    let buffer = |device: &wgpu::Device| {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 4,
+            usage: wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    };
+    assert_ne!(buffer(&first), buffer(&second));
+}

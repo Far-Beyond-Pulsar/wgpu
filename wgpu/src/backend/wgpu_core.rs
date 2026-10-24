@@ -748,32 +748,68 @@ impl Drop for CoreBufferMappedRange {
 }
 
 crate::cmp::impl_eq_ord_hash_arc_address!(ContextWgpuCore => .0);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreAdapter => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreDevice => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreQueue => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreShaderModule => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreBindGroupLayout => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreBindGroup => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreTextureView => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreSampler => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreBuffer => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreTexture => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreExternalTexture => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreBlas => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreTlas => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreQuerySet => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CorePipelineLayout => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreRenderPipeline => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreComputePipeline => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CorePipelineCache => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreCommandEncoder => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreComputePass => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreRenderPass => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreCommandBuffer => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreRenderBundleEncoder => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreRenderBundle => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreSurface => .id);
-crate::cmp::impl_eq_ord_hash_proxy!(CoreSurfaceOutputDetail => .surface_id);
+// HELIO PATCH: ids are only unique within one instance (`Global`), so handles
+// compare by their instance and their id. By id alone, the first device of
+// every instance compared equal to the first device of every other.
+macro_rules! impl_eq_ord_hash_in_instance {
+    ($($type:ty => $id:ident),* $(,)?) => {$(
+        impl PartialEq for $type {
+            fn eq(&self, other: &Self) -> bool {
+                self.$id == other.$id && self.context == other.context
+            }
+        }
+
+        impl Eq for $type {}
+
+        impl PartialOrd for $type {
+            fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        impl Ord for $type {
+            fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+                (&self.context, &self.$id).cmp(&(&other.context, &other.$id))
+            }
+        }
+
+        impl core::hash::Hash for $type {
+            fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+                self.context.hash(state);
+                self.$id.hash(state);
+            }
+        }
+    )*};
+}
+
+impl_eq_ord_hash_in_instance!(
+    CoreAdapter => id,
+    CoreDevice => id,
+    CoreQueue => id,
+    CoreShaderModule => id,
+    CoreBindGroupLayout => id,
+    CoreBindGroup => id,
+    CoreTextureView => id,
+    CoreSampler => id,
+    CoreBuffer => id,
+    CoreTexture => id,
+    CoreExternalTexture => id,
+    CoreBlas => id,
+    CoreTlas => id,
+    CoreQuerySet => id,
+    CorePipelineLayout => id,
+    CoreRenderPipeline => id,
+    CoreComputePipeline => id,
+    CorePipelineCache => id,
+    CoreCommandEncoder => id,
+    CoreComputePass => id,
+    CoreRenderPass => id,
+    CoreCommandBuffer => id,
+    CoreRenderBundleEncoder => id,
+    CoreRenderBundle => id,
+    CoreSurface => id,
+    CoreSurfaceOutputDetail => surface_id,
+);
 crate::cmp::impl_eq_ord_hash_proxy!(CoreQueueWriteBuffer => .mapping.ptr);
 crate::cmp::impl_eq_ord_hash_proxy!(CoreBufferMappedRange => .ptr);
 
