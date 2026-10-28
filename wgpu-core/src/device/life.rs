@@ -65,13 +65,7 @@ impl ActiveSubmission {
             // in the pending buffer list. If it came from a user command encoder,
             // it is in the tracker.
 
-            // HELIO PATCH: also the retained commands of a reusable submission.
-            if encoder.trackers.buffers.contains(buffer)
-                || encoder
-                    .reusable
-                    .as_ref()
-                    .is_some_and(|r| r.trackers.buffers.contains(buffer))
-            {
+            if encoder.trackers.buffers.contains(buffer) {
                 return true;
             }
 
@@ -96,12 +90,7 @@ impl ActiveSubmission {
             // in the pending buffer list. If it came from a user command encoder,
             // it is in the tracker.
 
-            if encoder.trackers.textures.contains(texture)
-                || encoder
-                    .reusable
-                    .as_ref()
-                    .is_some_and(|r| r.trackers.textures.contains(texture))
-            {
+            if encoder.trackers.textures.contains(texture) {
                 return true;
             }
 
@@ -135,12 +124,7 @@ impl ActiveSubmission {
 
     pub fn contains_query_set(&self, query_set: &QuerySet) -> bool {
         for encoder in &self.encoders {
-            if encoder.trackers.query_sets.contains(query_set)
-                || encoder
-                    .reusable
-                    .as_ref()
-                    .is_some_and(|r| r.trackers.query_sets.contains(query_set))
-            {
+            if encoder.trackers.query_sets.contains(query_set) {
                 return true;
             }
         }

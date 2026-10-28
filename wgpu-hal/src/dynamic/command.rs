@@ -18,9 +18,6 @@ use super::{
 pub trait DynCommandEncoder: DynResource + core::fmt::Debug {
     unsafe fn begin_encoding(&mut self, label: Label) -> Result<(), DeviceError>;
 
-    /// HELIO PATCH: see [`crate::CommandEncoder::set_reusable`].
-    unsafe fn set_reusable(&mut self, reusable: bool) -> bool;
-
     unsafe fn discard_encoding(&mut self);
 
     unsafe fn end_encoding(&mut self) -> Result<Box<dyn DynCommandBuffer>, DeviceError>;
@@ -238,10 +235,6 @@ pub trait DynCommandEncoder: DynResource + core::fmt::Debug {
 }
 
 impl<C: CommandEncoder + DynResource> DynCommandEncoder for C {
-    unsafe fn set_reusable(&mut self, reusable: bool) -> bool {
-        unsafe { C::set_reusable(self, reusable) }
-    }
-
     unsafe fn begin_encoding(&mut self, label: Label) -> Result<(), DeviceError> {
         unsafe { C::begin_encoding(self, label) }
     }

@@ -293,50 +293,6 @@ impl Queue {
         SubmissionIndex { index }
     }
 
-    /// Submits a series of command buffers, each either a normal
-    /// [`CommandBuffer`] (consumed, as by [`Queue::submit`]) or a
-    /// [`ReusableCommandBuffer`] (kept, and can be submitted again). They
-    /// execute in order.
-    ///
-    /// HELIO PATCH: not part of upstream wgpu.
-    pub fn submit_mixed<'a, I: IntoIterator<Item = SubmitItem<'a>>>(
-        &self,
-        items: I,
-    ) -> SubmissionIndex {
-        #[cfg(wgpu_core)]
-        if let Some(queue) = self.inner.as_core_opt() {
-            let mut actions = DeferredCommandBufferActions::default();
-            let mut keep_alive = alloc::vec::Vec::new();
-            let mut entries = alloc::vec::Vec::new();
-            for item in items {
-                match item {
-                    SubmitItem::Once(command_buffer) => {
-                        actions.append(&mut command_buffer.actions.lock());
-                        entries.push(wgc::command::MixedSubmission::Once(
-                            crate::backend::wgpu_core::core_command_buffer_id(
-                                command_buffer.buffer.as_core(),
-                            ),
-                        ));
-                        keep_alive.push(command_buffer);
-                    }
-                    SubmitItem::Reusable(reusable) => {
-                        entries.push(wgc::command::MixedSubmission::Reusable(&reusable.inner));
-                    }
-                }
-            }
-            let index = queue.context.queue_submit_mixed(queue, &entries);
-            drop(entries);
-            drop(keep_alive);
-            actions.execute(&self.inner);
-            return SubmissionIndex { index };
-        }
-        // Without wgpu-core no `ReusableCommandBuffer` can exist.
-        self.submit(items.into_iter().filter_map(|item| match item {
-            SubmitItem::Once(command_buffer) => Some(command_buffer),
-            SubmitItem::Reusable(_) => None,
-        }))
-    }
-
     /// Gets the amount of nanoseconds each tick of a timestamp query represents.
     ///
     /// Returns zero if timestamp queries are unsupported.
@@ -435,15 +391,4 @@ impl Queue {
             inner: dispatch,
         }
     }
-}
-
-/// One entry of [`Queue::submit_mixed`].
-///
-/// HELIO PATCH: not part of upstream wgpu.
-#[derive(Debug)]
-pub enum SubmitItem<'a> {
-    /// A normal command buffer, consumed by the submission.
-    Once(CommandBuffer),
-    /// A reusable command buffer, kept for later submissions.
-    Reusable(&'a ReusableCommandBuffer),
 }

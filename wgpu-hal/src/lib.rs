@@ -1393,23 +1393,6 @@ pub trait CommandEncoder: WasmNotSendSync + fmt::Debug {
     /// This `CommandEncoder` must be in the "closed" state.
     unsafe fn begin_encoding(&mut self, label: Label) -> Result<(), DeviceError>;
 
-    /// HELIO PATCH: ask for command buffers that can be submitted more than
-    /// once, including while an earlier submission of the same buffer is still
-    /// executing. Applies to command buffers begun after the call.
-    ///
-    /// Returns whether the backend supports it. Unsupported backends keep
-    /// single-use buffers and must not have their buffers resubmitted.
-    ///
-    /// # Safety
-    ///
-    /// This `CommandEncoder` must be in the "closed" state. A caller that
-    /// resubmits a buffer must keep every resource it records alive, and must
-    /// not reset the encoder, for as long as the buffer can be submitted.
-    unsafe fn set_reusable(&mut self, reusable: bool) -> bool {
-        let _ = reusable;
-        false
-    }
-
     /// Discard the command list under construction.
     ///
     /// If an error has occurred while recording commands, this

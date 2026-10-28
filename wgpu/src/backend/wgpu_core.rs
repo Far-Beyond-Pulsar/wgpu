@@ -4151,36 +4151,3 @@ impl dispatch::BufferMappedRangeInterface for CoreBufferMappedRange {
         panic!("Only available on WebGPU")
     }
 }
-
-// HELIO PATCH: reusable command buffers. See `wgc::command::ReusableCommandBuffer`.
-impl ContextWgpuCore {
-    pub(crate) fn command_encoder_mark_reusable(&self, encoder: &CoreCommandEncoder) -> bool {
-        self.0.command_encoder_mark_reusable(encoder.id)
-    }
-
-    pub(crate) fn command_buffer_make_reusable(
-        &self,
-        command_buffer: &CoreCommandBuffer,
-    ) -> Result<wgc::command::ReusableCommandBuffer, wgc::command::ReusableCommandBufferError> {
-        self.0.command_buffer_make_reusable(command_buffer.id)
-    }
-
-    pub(crate) fn queue_submit_mixed(
-        &self,
-        queue: &CoreQueue,
-        submissions: &[wgc::command::MixedSubmission<'_>],
-    ) -> u64 {
-        match self.0.queue_submit_mixed(queue.id, submissions) {
-            Ok(index) => index,
-            Err((index, err)) => {
-                self.handle_error_nolabel(&queue.error_sink, err, "Queue::submit_mixed");
-                index
-            }
-        }
-    }
-}
-
-/// HELIO PATCH: the wgpu-core id behind a command buffer.
-pub(crate) fn core_command_buffer_id(command_buffer: &CoreCommandBuffer) -> wgc::id::CommandBufferId {
-    command_buffer.id
-}
