@@ -1,14 +1,17 @@
 // Ray tracing
 // Major missing optimizations (no api surface changes needed):
 // - use custom tracker to track build state
-// - no forced rebuilt (build mode deduction)
 // - lazy instance buffer allocation
 // - maybe share scratch and instance staging buffer allocation
 // - partial instance buffer uploads (api surface already designed with this in mind)
 // - Batch BLAS read-backs (if it shows up in performance).
 // - ([non performance] extract function in build (rust function extraction with guards is a pain))
 
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use alloc::{
+    boxed::Box,
+    sync::{Arc, Weak},
+    vec::Vec,
+};
 
 #[cfg(feature = "serde")]
 use macro_rules_attribute::apply;
@@ -25,7 +28,7 @@ use crate::{
     device::{DeviceError, MissingFeatures},
     id::{BlasId, BufferId, TlasId},
     resource::{
-        Blas, BlasCompactCallback, BlasPrepareCompactResult, DestroyedResourceError,
+        Blas, BlasCompactCallback, BlasPrepareCompactResult, Buffer, DestroyedResourceError,
         InvalidResourceError, MissingBufferUsageError, ResourceErrorIdent, Tlas,
     },
 };
@@ -50,6 +53,10 @@ pub enum CreateBlasError {
     TooManyPrimitives(u32, u32),
     #[error("AABB geometry stride {0} is invalid (must be >= {1} and a multiple of 8)")]
     InvalidAabbStride(BufferAddress, BufferAddress),
+    #[error(
+        "Update mode `PreferUpdate` requires the flag `AccelerationStructureFlags::ALLOW_UPDATE`"
+    )]
+    PreferUpdateWithoutAllowUpdate,
 }
 
 impl WebGpuError for CreateBlasError {
@@ -61,7 +68,8 @@ impl WebGpuError for CreateBlasError {
             | Self::InvalidVertexFormat(..)
             | Self::TooManyGeometries(..)
             | Self::TooManyPrimitives(..)
-            | Self::InvalidAabbStride(..) => ErrorType::Validation,
+            | Self::InvalidAabbStride(..)
+            | Self::PreferUpdateWithoutAllowUpdate => ErrorType::Validation,
         }
     }
 }
@@ -76,6 +84,10 @@ pub enum CreateTlasError {
     DisallowedFlag(wgt::AccelerationStructureFlags),
     #[error("Limit `max_tlas_instance_count` is {0}, but the TLAS had a maximum of {1} instances")]
     TooManyInstances(u32, u32),
+    #[error(
+        "Update mode `PreferUpdate` requires the flag `AccelerationStructureFlags::ALLOW_UPDATE`"
+    )]
+    PreferUpdateWithoutAllowUpdate,
 }
 
 impl WebGpuError for CreateTlasError {
@@ -83,7 +95,9 @@ impl WebGpuError for CreateTlasError {
         match self {
             Self::Device(e) => e.webgpu_error_type(),
             Self::MissingFeatures(e) => e.webgpu_error_type(),
-            Self::DisallowedFlag(..) | Self::TooManyInstances(..) => ErrorType::Validation,
+            Self::DisallowedFlag(..)
+            | Self::TooManyInstances(..)
+            | Self::PreferUpdateWithoutAllowUpdate => ErrorType::Validation,
         }
     }
 }
@@ -267,15 +281,23 @@ pub enum ValidateAsActionsError {
 
     #[error("Blas {0:?} is newer than the containing Tlas {1:?}")]
     BlasNewerThenTlas(ResourceErrorIdent, ResourceErrorIdent),
+
+    #[error("Blas {0:?} was encoded as an update of its last build, but a build with different inputs was submitted in between")]
+    BlasUpdateSourceChanged(ResourceErrorIdent),
+
+    #[error("Tlas {0:?} was encoded as an update of its last build, but a build with a different instance count was submitted in between")]
+    TlasUpdateSourceChanged(ResourceErrorIdent),
 }
 
 impl WebGpuError for ValidateAsActionsError {
     fn webgpu_error_type(&self) -> ErrorType {
         match self {
             Self::DestroyedResource(e) => e.webgpu_error_type(),
-            Self::UsedUnbuiltTlas(..) | Self::UsedUnbuiltBlas(..) | Self::BlasNewerThenTlas(..) => {
-                ErrorType::Validation
-            }
+            Self::UsedUnbuiltTlas(..)
+            | Self::UsedUnbuiltBlas(..)
+            | Self::BlasNewerThenTlas(..)
+            | Self::BlasUpdateSourceChanged(..)
+            | Self::TlasUpdateSourceChanged(..) => ErrorType::Validation,
         }
     }
 }
@@ -332,15 +354,129 @@ pub struct TlasPackage<'a> {
     pub lowest_unmodified: u32,
 }
 
+/// The inputs of a BLAS build that an update of it must keep.
+///
+/// An update (refit) may change the vertex positions, vertex buffer, first vertex and stride,
+/// the transform buffer contents and the AABB data; none of these are kept here. Vulkan
+/// (`VUID-vkCmdBuildAccelerationStructuresKHR-pInfos-03758` to `-03769`) requires the geometry
+/// count, kinds and flags, the vertex format, vertex count, index format, primitive counts and
+/// whether a transform is used to match the last build. D3D12 ("Acceleration structure update
+/// constraints") also forbids moving the index data, so the index buffer and first index are
+/// kept as well.
+#[derive(Debug, PartialEq)]
+pub(crate) enum BlasBuildShape {
+    Triangles(Vec<BlasTriangleBuildShape>),
+    Aabbs(Vec<wgt::BlasAABBGeometrySizeDescriptor>),
+}
+
+#[derive(Debug)]
+pub(crate) struct BlasTriangleBuildShape {
+    size: wgt::BlasTriangleGeometrySizeDescriptor,
+    /// The index buffer and first index. The buffer is held weakly: only its identity matters,
+    /// and a live `Weak` keeps the allocation, so the address cannot be reused by another buffer.
+    indices: Option<(Weak<Buffer>, Option<u32>)>,
+    uses_transform: bool,
+}
+
+impl PartialEq for BlasTriangleBuildShape {
+    fn eq(&self, other: &Self) -> bool {
+        self.size == other.size
+            && self.uses_transform == other.uses_transform
+            && match (&self.indices, &other.indices) {
+                (None, None) => true,
+                (Some((a, a_first)), Some((b, b_first))) => {
+                    Weak::ptr_eq(a, b) && a_first == b_first
+                }
+                _ => false,
+            }
+    }
+}
+
+impl BlasBuildShape {
+    pub(crate) fn new(geometries: &ArcBlasGeometries) -> Self {
+        match geometries {
+            OwnedBlasGeometries::TriangleGeometries(geometries) => Self::Triangles(
+                geometries
+                    .iter()
+                    .map(|geometry| BlasTriangleBuildShape {
+                        size: geometry.size.clone(),
+                        indices: geometry
+                            .index_buffer
+                            .as_ref()
+                            .map(|buffer| (Arc::downgrade(buffer), geometry.first_index)),
+                        uses_transform: geometry.transform_buffer.is_some(),
+                    })
+                    .collect(),
+            ),
+            OwnedBlasGeometries::AabbGeometries(geometries) => Self::Aabbs(
+                geometries
+                    .iter()
+                    .map(|geometry| geometry.size.clone())
+                    .collect(),
+            ),
+        }
+    }
+
+    /// Whether a build from `geometries` keeps this shape, so that it may update a structure
+    /// whose last build had this shape.
+    pub(crate) fn matches(&self, geometries: &ArcBlasGeometries) -> bool {
+        match (self, geometries) {
+            (Self::Triangles(shapes), OwnedBlasGeometries::TriangleGeometries(geometries)) => {
+                shapes.len() == geometries.len()
+                    && shapes.iter().zip(geometries).all(|(shape, geometry)| {
+                        shape.size == geometry.size
+                            && shape.uses_transform == geometry.transform_buffer.is_some()
+                            && match (&shape.indices, &geometry.index_buffer) {
+                                (None, None) => true,
+                                (Some((buffer, first_index)), Some(index_buffer)) => {
+                                    core::ptr::eq(buffer.as_ptr(), Arc::as_ptr(index_buffer))
+                                        && *first_index == geometry.first_index
+                                }
+                                _ => false,
+                            }
+                    })
+            }
+            (Self::Aabbs(shapes), OwnedBlasGeometries::AabbGeometries(geometries)) => {
+                shapes.len() == geometries.len()
+                    && shapes
+                        .iter()
+                        .zip(geometries)
+                        .all(|(shape, geometry)| *shape == geometry.size)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// How an acceleration structure build was encoded.
+///
+/// `S` is what an update must keep from the build it updates: a [`BlasBuildShape`] for a BLAS,
+/// the instance count for a TLAS.
+#[derive(Debug, Clone)]
+pub(crate) enum AsBuildKind<S> {
+    /// A full build. `None` when its inputs are not kept: the structure does not prefer updates,
+    /// or it was built outside `wgpu-core` (`mark_acceleration_structures_built`).
+    Build(Option<S>),
+    /// An update of the last build, which must still have had these inputs at submission.
+    Update(S),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BlasBuild {
+    pub blas: Arc<Blas>,
+    pub kind: AsBuildKind<Arc<BlasBuildShape>>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct TlasBuild {
     pub tlas: Arc<Tlas>,
     pub dependencies: Vec<Arc<Blas>>,
+    pub kind: AsBuildKind<u32>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AsBuild {
-    pub blas_s_built: Vec<Arc<Blas>>,
+    pub blas_s_built: Vec<BlasBuild>,
     pub tlas_s_built: Vec<TlasBuild>,
 }
 
@@ -403,6 +539,9 @@ pub type TraceBlasGeometries = OwnedBlasGeometries<IdReferences>;
 pub struct OwnedBlasBuildEntry<R: ReferenceType> {
     pub blas: R::Blas,
     pub geometries: OwnedBlasGeometries<R>,
+    /// Do a full build even if the BLAS prefers updates and this build could be one.
+    /// Taken from [`Blas::request_rebuild`] when the build is recorded.
+    pub force_rebuild: bool,
 }
 
 pub type ArcBlasBuildEntry = OwnedBlasBuildEntry<ArcReferences>;
@@ -426,6 +565,9 @@ pub struct OwnedTlasPackage<R: ReferenceType> {
     pub tlas: R::Tlas,
     pub instances: Vec<Option<OwnedTlasInstance<R>>>,
     pub lowest_unmodified: u32,
+    /// Do a full build even if the TLAS prefers updates and this build could be one.
+    /// Taken from [`Tlas::request_rebuild`] when the build is recorded.
+    pub force_rebuild: bool,
 }
 
 pub type TraceTlasPackage = OwnedTlasPackage<IdReferences>;

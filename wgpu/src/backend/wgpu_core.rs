@@ -2408,6 +2408,11 @@ impl dispatch::BlasInterface for CoreBlas {
             }
         }
     }
+
+    fn request_rebuild(&self) {
+        // An invalid BLAS is reported by the build that uses it.
+        let _ = self.context.0.blas_request_rebuild(self.id);
+    }
 }
 
 impl Drop for CoreBlas {
@@ -2416,7 +2421,12 @@ impl Drop for CoreBlas {
     }
 }
 
-impl dispatch::TlasInterface for CoreTlas {}
+impl dispatch::TlasInterface for CoreTlas {
+    fn request_rebuild(&self) {
+        // An invalid TLAS is reported by the build that uses it.
+        let _ = self.context.0.tlas_request_rebuild(self.id);
+    }
+}
 
 impl Drop for CoreTlas {
     fn drop(&mut self) {

@@ -64,10 +64,29 @@ pub enum BlasGeometrySizeDescriptors {
 pub enum AccelerationStructureUpdateMode {
     /// Always perform a full build.
     Build,
-    /// If possible, perform an incremental update.
+    /// Update (refit) the structure in place when a build allows it, else perform a full build.
     ///
-    /// Not advised for major topology changes.
-    /// (Useful for e.g. skinning)
+    /// An update keeps the tree of the last full build and only moves it to the new input
+    /// data. It is much cheaper than a build, but trace performance drops as the inputs drift
+    /// from those of the last full build, so it suits deforming geometry (skinning, cloth) and
+    /// moving instances, with a full build every few frames (`Blas::request_rebuild`,
+    /// `Tlas::request_rebuild` in `wgpu`).
+    ///
+    /// Requires [`AccelerationStructureFlags::ALLOW_UPDATE`].
+    ///
+    /// A build is an update when the structure was last built by `wgpu` (not by `as_hal` code
+    /// marked with `mark_acceleration_structures_built`), no rebuild was requested, and:
+    /// - for a BLAS, the build keeps, per geometry, the size descriptor (vertex format and
+    ///   count, index format and count, AABB count, flags), the index buffer and first index,
+    ///   and whether a transform buffer is used, as well as the number and kind of geometries.
+    ///   Vertex data (buffer, first vertex, stride, positions), transform contents and AABB data
+    ///   may change.
+    /// - for a TLAS, the build keeps the number of instances. Transforms, masks, custom data and
+    ///   the BLAS each instance refers to may change.
+    ///
+    /// The caller must also keep the index values of an indexed BLAS, which `wgpu` cannot check,
+    /// and must not make a triangle active or inactive (a vertex with a NaN position makes it
+    /// inactive). Request a rebuild when either changes.
     PreferUpdate,
 }
 
@@ -128,8 +147,9 @@ bitflags::bitflags!(
     #[cfg_attr(feature = "serde", serde(transparent))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct AccelerationStructureFlags: u8 {
-        /// Allow for incremental updates (no change in size), currently this is unimplemented
-        /// and will build as normal (this is fine, update vs build should be unnoticeable)
+        /// Allow the acceleration structure to be updated (refit) instead of rebuilt. Required
+        /// by [`AccelerationStructureUpdateMode::PreferUpdate`]; it may make builds slower and
+        /// the structure larger, so set it only on structures that are updated.
         const ALLOW_UPDATE = 1 << 0;
         /// Allow the acceleration structure to be compacted in a copy operation
         /// (`Blas::prepare_for_compaction`, `CommandEncoder::compact_blas`).

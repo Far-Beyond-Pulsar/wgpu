@@ -358,6 +358,7 @@ impl IntoTrace for crate::ray_tracing::OwnedBlasBuildEntry<ArcReferences> {
         crate::ray_tracing::OwnedBlasBuildEntry {
             blas: self.blas.into_trace(),
             geometries: self.geometries.into_trace(),
+            force_rebuild: self.force_rebuild,
         }
     }
 }
@@ -419,6 +420,7 @@ impl IntoTrace for crate::ray_tracing::OwnedTlasPackage<ArcReferences> {
                 .map(|opt| opt.map(|inst| inst.into_trace()))
                 .collect(),
             lowest_unmodified: self.lowest_unmodified,
+            force_rebuild: self.force_rebuild,
         }
     }
 }

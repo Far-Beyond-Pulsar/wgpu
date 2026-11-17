@@ -1769,12 +1769,18 @@ impl crate::CommandEncoder for super::CommandEncoder {
                     .resource
                     .GetGPUVirtualAddress()
             };
-            let src_acceleration_structure_address = descriptor
-                .source_acceleration_structure
-                .as_ref()
-                .map_or(0, |source| unsafe {
-                    source.resource.GetGPUVirtualAddress()
-                });
+            // An update without a source is done in place: D3D12 takes the destination as the
+            // source. A build takes no source.
+            let src_acceleration_structure_address = match descriptor.mode {
+                crate::AccelerationStructureBuildMode::Build => 0,
+                crate::AccelerationStructureBuildMode::Update => unsafe {
+                    descriptor
+                        .source_acceleration_structure
+                        .unwrap_or(descriptor.destination_acceleration_structure)
+                        .resource
+                        .GetGPUVirtualAddress()
+                },
+            };
             let scratch_address = unsafe {
                 descriptor.scratch_buffer.resource.GetGPUVirtualAddress()
                     + descriptor.scratch_buffer_offset

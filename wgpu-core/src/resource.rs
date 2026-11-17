@@ -6,6 +6,7 @@ use core::{
     num::NonZeroU64,
     ops::Range,
     ptr::NonNull,
+    sync::atomic::{AtomicBool, Ordering},
 };
 use smallvec::SmallVec;
 use thiserror::Error;
@@ -25,7 +26,7 @@ use crate::{
     hal_label,
     init_tracker::{BufferInitTracker, TextureInitTracker},
     lock::{rank, Mutex, RwLock},
-    ray_tracing::{BlasCompactReadyPendingClosure, BlasPrepareCompactError},
+    ray_tracing::{BlasBuildShape, BlasCompactReadyPendingClosure, BlasPrepareCompactError},
     resource_log,
     snatch::{SnatchGuard, Snatchable, Snatchable2},
     timestamp_normalization::TimestampNormalizationBindGroup,
@@ -2532,6 +2533,11 @@ pub struct Blas {
     pub(crate) flags: wgt::AccelerationStructureFlags,
     pub(crate) update_mode: wgt::AccelerationStructureUpdateMode,
     pub(crate) built_index: RwLock<Option<NonZeroU64>>,
+    /// The inputs of the last submitted full build, if this BLAS prefers updates and wgpu-core
+    /// built it. A later build with the same inputs is encoded as an update.
+    pub(crate) last_build: Mutex<Option<Arc<BlasBuildShape>>>,
+    /// Set by [`Blas::request_rebuild`]; taken by the next recorded build.
+    pub(crate) rebuild_requested: AtomicBool,
     pub(crate) handle: u64,
     /// The `label` from the descriptor used to create the resource.
     pub(crate) label: String,
@@ -2568,6 +2574,16 @@ impl RawResourceAccess for Blas {
 }
 
 impl Blas {
+    /// Make the next recorded build of this BLAS a full build, even if it could be an update.
+    pub(crate) fn request_rebuild(&self) {
+        self.rebuild_requested.store(true, Ordering::Relaxed);
+    }
+
+    /// Take the request made by [`Self::request_rebuild`], for a build being recorded.
+    pub(crate) fn take_rebuild_request(&self) -> bool {
+        self.rebuild_requested.swap(false, Ordering::Relaxed)
+    }
+
     pub(crate) fn prepare_compact_async(
         self: &Arc<Self>,
         op: Option<BlasCompactCallback>,
@@ -2681,6 +2697,11 @@ pub struct Tlas {
     pub(crate) flags: wgt::AccelerationStructureFlags,
     pub(crate) update_mode: wgt::AccelerationStructureUpdateMode,
     pub(crate) built_index: RwLock<Option<NonZeroU64>>,
+    /// The instance count of the last submitted full build, if this TLAS prefers updates and
+    /// wgpu-core built it. A later build with the same instance count is encoded as an update.
+    pub(crate) last_build_instance_count: Mutex<Option<u32>>,
+    /// Set by [`Tlas::request_rebuild`]; taken by the next recorded build.
+    pub(crate) rebuild_requested: AtomicBool,
     pub(crate) dependencies: RwLock<Vec<Arc<Blas>>>,
     pub(crate) instance_buffer: ManuallyDrop<Box<dyn hal::DynBuffer>>,
     /// The `label` from the descriptor used to create the resource.
@@ -2706,6 +2727,18 @@ impl RawResourceAccess for Tlas {
 
     fn raw<'a>(&'a self, guard: &'a SnatchGuard) -> Option<&'a Self::DynResource> {
         self.raw.get(guard).map(|raw| raw.as_ref())
+    }
+}
+
+impl Tlas {
+    /// Make the next recorded build of this TLAS a full build, even if it could be an update.
+    pub(crate) fn request_rebuild(&self) {
+        self.rebuild_requested.store(true, Ordering::Relaxed);
+    }
+
+    /// Take the request made by [`Self::request_rebuild`], for a build being recorded.
+    pub(crate) fn take_rebuild_request(&self) -> bool {
+        self.rebuild_requested.swap(false, Ordering::Relaxed)
     }
 }
 

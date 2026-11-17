@@ -1,5 +1,8 @@
 use alloc::{string::ToString as _, sync::Arc, vec::Vec};
-use core::mem::{size_of, ManuallyDrop};
+use core::{
+    mem::{size_of, ManuallyDrop},
+    sync::atomic::AtomicBool,
+};
 
 #[cfg(feature = "trace")]
 use crate::device::trace::{Action, IntoTrace};
@@ -38,6 +41,14 @@ impl Device {
             .contains(wgt::AccelerationStructureFlags::ALLOW_RAY_HIT_VERTEX_RETURN)
         {
             self.require_features(Features::EXPERIMENTAL_RAY_HIT_VERTEX_RETURN)?;
+        }
+
+        if blas_desc.update_mode == wgt::AccelerationStructureUpdateMode::PreferUpdate
+            && !blas_desc
+                .flags
+                .contains(wgt::AccelerationStructureFlags::ALLOW_UPDATE)
+        {
+            return Err(CreateBlasError::PreferUpdateWithoutAllowUpdate);
         }
 
         let size_info = match &sizes {
@@ -203,6 +214,8 @@ impl Device {
             handle,
             label: blas_desc.label.to_string(),
             built_index: RwLock::new(rank::BLAS_BUILT_INDEX, None),
+            last_build: Mutex::new(rank::BLAS_LAST_BUILD, None),
+            rebuild_requested: AtomicBool::new(false),
             tracking_data: TrackingData::new(self.tracker_indices.blas_s.clone()),
             compaction_buffer,
             compacted_state: Mutex::new(rank::BLAS_COMPACTION_STATE, BlasCompactState::Idle),
@@ -237,6 +250,14 @@ impl Device {
             .contains(wgt::AccelerationStructureFlags::ALLOW_RAY_HIT_VERTEX_RETURN)
         {
             self.require_features(Features::EXPERIMENTAL_RAY_HIT_VERTEX_RETURN)?;
+        }
+
+        if desc.update_mode == wgt::AccelerationStructureUpdateMode::PreferUpdate
+            && !desc
+                .flags
+                .contains(wgt::AccelerationStructureFlags::ALLOW_UPDATE)
+        {
+            return Err(CreateTlasError::PreferUpdateWithoutAllowUpdate);
         }
 
         let size_info = unsafe {
@@ -288,6 +309,8 @@ impl Device {
             flags: desc.flags,
             update_mode: desc.update_mode,
             built_index: RwLock::new(rank::TLAS_BUILT_INDEX, None),
+            last_build_instance_count: Mutex::new(rank::TLAS_LAST_BUILD, None),
+            rebuild_requested: AtomicBool::new(false),
             dependencies: RwLock::new(rank::TLAS_DEPENDENCIES, Vec::new()),
             instance_buffer: ManuallyDrop::new(instance_buffer),
             label: desc.label.to_string(),
@@ -428,6 +451,30 @@ impl Global {
                 Err(err)
             }
         }
+    }
+
+    /// Make the next build of this BLAS recorded with
+    /// [`Self::command_encoder_build_acceleration_structures`] a full build, even if it could be
+    /// an update. Only meaningful for a BLAS created with
+    /// [`wgt::AccelerationStructureUpdateMode::PreferUpdate`].
+    pub fn blas_request_rebuild(&self, blas_id: BlasId) -> Result<(), InvalidResourceError> {
+        profiling::scope!("Blas::request_rebuild");
+        api_log!("Blas::request_rebuild {blas_id:?}");
+
+        self.hub.blas_s.get(blas_id).get()?.request_rebuild();
+        Ok(())
+    }
+
+    /// Make the next build of this TLAS recorded with
+    /// [`Self::command_encoder_build_acceleration_structures`] a full build, even if it could be
+    /// an update. Only meaningful for a TLAS created with
+    /// [`wgt::AccelerationStructureUpdateMode::PreferUpdate`].
+    pub fn tlas_request_rebuild(&self, tlas_id: TlasId) -> Result<(), InvalidResourceError> {
+        profiling::scope!("Tlas::request_rebuild");
+        api_log!("Tlas::request_rebuild {tlas_id:?}");
+
+        self.hub.tlas_s.get(tlas_id).get()?.request_rebuild();
+        Ok(())
     }
 
     pub fn ready_for_compaction(&self, blas_id: BlasId) -> Result<bool, InvalidResourceError> {

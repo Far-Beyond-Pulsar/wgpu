@@ -337,4 +337,21 @@ impl Blas {
     pub fn ready_for_compaction(&self) -> bool {
         self.inner.ready_for_compaction()
     }
+
+    /// Makes the next build of this BLAS a full build, even if it could be an update.
+    ///
+    /// A BLAS created with [`AccelerationStructureUpdateMode::PreferUpdate`] is updated (refit)
+    /// whenever a build keeps the inputs of its last build. An update only moves the existing
+    /// tree to the new vertex positions, so trace performance drops as the geometry deforms
+    /// away from the pose it was last fully built in. Call this every few frames, or when the
+    /// deformation is large, to build the tree again.
+    ///
+    /// The request is taken by the next [`CommandEncoder::build_acceleration_structures`] call
+    /// that includes this BLAS. It has no effect on a BLAS created with
+    /// [`AccelerationStructureUpdateMode::Build`], which is always fully built.
+    ///
+    /// [`CommandEncoder::build_acceleration_structures`]: crate::CommandEncoder::build_acceleration_structures
+    pub fn request_rebuild(&self) {
+        self.inner.request_rebuild();
+    }
 }

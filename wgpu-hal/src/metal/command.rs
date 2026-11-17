@@ -1861,15 +1861,30 @@ impl crate::CommandEncoder for super::CommandEncoder {
                             descriptor.scratch_buffer_offset as usize,
                         );
                 }
-                crate::AccelerationStructureBuildMode::Update => unsafe {
-                    command_encoder.refitAccelerationStructure_descriptor_destination_scratchBuffer_scratchBufferOffset(
-                        &descriptor.source_acceleration_structure.unwrap().raw,
-                        &acceleration_structure_descriptor,
-                        Some(&descriptor.destination_acceleration_structure.raw),
-                        Some(&descriptor.scratch_buffer.raw),
-                        descriptor.scratch_buffer_offset as usize,
-                    );
-                },
+                // Without a source the refit is done in place, which Metal does when the
+                // destination is nil.
+                crate::AccelerationStructureBuildMode::Update => {
+                    match descriptor.source_acceleration_structure {
+                        Some(source) => unsafe {
+                            command_encoder.refitAccelerationStructure_descriptor_destination_scratchBuffer_scratchBufferOffset(
+                                &source.raw,
+                                &acceleration_structure_descriptor,
+                                Some(&descriptor.destination_acceleration_structure.raw),
+                                Some(&descriptor.scratch_buffer.raw),
+                                descriptor.scratch_buffer_offset as usize,
+                            );
+                        },
+                        None => unsafe {
+                            command_encoder.refitAccelerationStructure_descriptor_destination_scratchBuffer_scratchBufferOffset(
+                                &descriptor.destination_acceleration_structure.raw,
+                                &acceleration_structure_descriptor,
+                                None,
+                                Some(&descriptor.scratch_buffer.raw),
+                                descriptor.scratch_buffer_offset as usize,
+                            );
+                        },
+                    }
+                }
             }
         }
     }

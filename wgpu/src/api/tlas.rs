@@ -87,6 +87,25 @@ impl Tlas {
         self.lowest_unmodified
     }
 
+    /// Makes the next build of this TLAS a full build, even if it could be an update.
+    ///
+    /// A TLAS created with [`AccelerationStructureUpdateMode::PreferUpdate`] is updated (refit)
+    /// whenever a build keeps the instance count of its last build. An update keeps the tree
+    /// of the last full build and only refits its bounds, so trace performance drops as
+    /// instances move far from where they were when it was built. Call this every few frames,
+    /// or after large movements, to build the tree again.
+    ///
+    /// The request is taken by the next [`CommandEncoder::build_acceleration_structures`] call
+    /// that includes this TLAS. It has no effect on a TLAS created with
+    /// [`AccelerationStructureUpdateMode::Build`], which is always fully built.
+    ///
+    /// [`AccelerationStructureUpdateMode::PreferUpdate`]: crate::AccelerationStructureUpdateMode::PreferUpdate
+    /// [`AccelerationStructureUpdateMode::Build`]: crate::AccelerationStructureUpdateMode::Build
+    /// [`CommandEncoder::build_acceleration_structures`]: crate::CommandEncoder::build_acceleration_structures
+    pub fn request_rebuild(&self) {
+        self.inner.request_rebuild();
+    }
+
     /// Get a reference to all instances.
     pub fn get(&self) -> &[Option<TlasInstance>] {
         &self.instances

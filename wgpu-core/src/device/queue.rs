@@ -4,7 +4,7 @@ use core::{
     mem::{self, ManuallyDrop},
     num::NonZeroU64,
     ptr::NonNull,
-    sync::atomic::Ordering,
+    sync::atomic::{AtomicBool, Ordering},
 };
 use smallvec::SmallVec;
 use thiserror::Error;
@@ -1829,6 +1829,9 @@ impl Queue {
             update_mode: blas.update_mode,
             // Bypass the submit checks which update this because we don't submit this normally.
             built_index: RwLock::new(rank::BLAS_BUILT_INDEX, Some(built_index)),
+            // A compacted BLAS can never be built again, so it has nothing to update.
+            last_build: Mutex::new(rank::BLAS_LAST_BUILD, None),
+            rebuild_requested: AtomicBool::new(false),
             handle,
             label: new_label,
             tracking_data: TrackingData::new(blas.device.tracker_indices.blas_s.clone()),

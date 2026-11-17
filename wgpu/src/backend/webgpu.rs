@@ -3046,6 +3046,9 @@ impl dispatch::BlasInterface for WebBlas {
     fn ready_for_compaction(&self) -> bool {
         unimplemented!("Raytracing not implemented for web")
     }
+    fn request_rebuild(&self) {
+        unimplemented!("Raytracing not implemented for web")
+    }
 }
 impl Drop for WebBlas {
     fn drop(&mut self) {
@@ -3053,7 +3056,11 @@ impl Drop for WebBlas {
     }
 }
 
-impl dispatch::TlasInterface for WebTlas {}
+impl dispatch::TlasInterface for WebTlas {
+    fn request_rebuild(&self) {
+        unimplemented!("Raytracing not implemented for web")
+    }
+}
 impl Drop for WebTlas {
     fn drop(&mut self) {
         // no-op

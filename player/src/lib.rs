@@ -1266,6 +1266,7 @@ impl Player {
         wgc::ray_tracing::OwnedBlasBuildEntry {
             blas: self.resolve_blas_id(entry.blas),
             geometries: self.resolve_blas_geometries(entry.geometries),
+            force_rebuild: entry.force_rebuild,
         }
     }
 
@@ -1281,6 +1282,7 @@ impl Player {
                 .map(|opt| opt.map(|inst| self.resolve_tlas_instance(inst)))
                 .collect(),
             lowest_unmodified: package.lowest_unmodified,
+            force_rebuild: package.force_rebuild,
         }
     }
 
