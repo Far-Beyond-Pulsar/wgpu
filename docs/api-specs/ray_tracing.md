@@ -73,8 +73,23 @@ the build) and instance staging memory (to copy the instances to the GPU). The s
 the [`Blas`] and [`Tlas`] builds so in general it is advisable to try and integrate the builds together. Because
 building is slow, it should be done as few times as possible. For moving geometry (players, particles, etc.), use
 [`PREFER_FAST_BUILD`](https://wgpu.rs/doc/wgpu_hal/struct.AccelerationStructureBuildFlags.html#associatedconstant.PREFER_FAST_BUILD)
-to speed up builds. Updating (performing a partial rebuild) is currently unsupported, but may be implemented in the
-future. You should compact any geometry which will not change (e.g. static level geometry) once it has been built.
+to speed up builds. You should compact any geometry which will not change (e.g. static level geometry) once it has
+been built.
+
+#### Updating
+
+An acceleration structure created with [`AccelerationStructureUpdateMode::PreferUpdate`] (and
+[`AccelerationStructureFlags::ALLOW_UPDATE`]) is updated in place instead of rebuilt whenever a build allows it. An
+update (or refit) keeps the tree of the last full build and only moves it to the new data, which is much cheaper than
+a build. A [`Blas`] build is an update when it keeps the inputs of the last build except the vertex data, the
+transform contents and the AABB data: the same geometries with the same size descriptors, the same index buffer and
+first index, and the same use of a transform buffer. A [`Tlas`] build is an update when it keeps the number of
+instances. Any other build of such a structure is a full build, as is the first one. The index values of an indexed
+[`Blas`] must not change between full builds; `wgpu` cannot check them.
+
+Trace performance drops as the data drifts from that of the last full build, so engines rebuild deforming geometry
+every few frames or when it has deformed a lot: [`Blas::request_rebuild`] and [`Tlas::request_rebuild`] make the next
+build a full one. A compacted [`Blas`] can be neither updated nor rebuilt.
 
 ### [`Blas`] compaction
 
@@ -133,6 +148,10 @@ fn render(/*whatever args you need to render*/) {
 [`Blas::prepare_compaction_async`]: https://wgpu.rs/doc/wgpu/struct.Blas.html#method.prepare_compaction_async
 [`Blas::ready_for_compaction`]: https://wgpu.rs/doc/wgpu/struct.Blas.html#method.ready_for_compaction
 [`Queue::compact_blas`]: https://wgpu.rs/doc/wgpu/struct.Queue.html#method.compact_blas
+[`AccelerationStructureUpdateMode::PreferUpdate`]: https://wgpu.rs/doc/wgpu/enum.AccelerationStructureUpdateMode.html#variant.PreferUpdate
+[`AccelerationStructureFlags::ALLOW_UPDATE`]: https://wgpu.rs/doc/wgpu/struct.AccelerationStructureFlags.html#associatedconstant.ALLOW_UPDATE
+[`Blas::request_rebuild`]: https://wgpu.rs/doc/wgpu/struct.Blas.html#method.request_rebuild
+[`Tlas::request_rebuild`]: https://wgpu.rs/doc/wgpu/struct.Tlas.html#method.request_rebuild
 
 ## `naga`'s raytracing API:
 

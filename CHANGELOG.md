@@ -42,6 +42,26 @@ Bottom level categories:
 
 ## Unreleased
 
+### Added/New Features
+
+#### General
+
+- Acceleration structures created with `AccelerationStructureUpdateMode::PreferUpdate` are now updated (refit) in place when a build keeps the inputs of their last build: for a BLAS, the same geometries, size descriptors, index buffer and use of a transform, with new vertex, transform or AABB data; for a TLAS, the same instance count. Other builds remain full builds. `PreferUpdate` now requires `AccelerationStructureFlags::ALLOW_UPDATE`. `Blas::request_rebuild` and `Tlas::request_rebuild` make the next build a full one.
+
+### Bug Fixes
+
+#### General
+
+- Fix a deadlock between `Queue::compact_blas` and a submit or present on another thread, which took the device's command indices and the queue's pending writes in opposite orders.
+
+#### DX12
+
+- An acceleration structure update without a source structure is now done in place, as `wgpu-hal` documents, instead of reading from a null source.
+
+#### Metal
+
+- An acceleration structure update without a source structure is now done in place, as `wgpu-hal` documents, instead of panicking.
+
 ## v30.0.1 (2026-08-21)
 
 ### Bug Fixes
