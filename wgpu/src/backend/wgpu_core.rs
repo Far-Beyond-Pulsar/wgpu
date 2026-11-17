@@ -2413,6 +2413,11 @@ impl dispatch::BlasInterface for CoreBlas {
         // An invalid BLAS is reported by the build that uses it.
         let _ = self.context.0.blas_request_rebuild(self.id);
     }
+
+    fn sizes(&self) -> wgt::AccelerationStructureSizes {
+        // An invalid BLAS takes no memory; the build that uses it reports it.
+        self.context.0.blas_sizes(self.id).unwrap_or_default()
+    }
 }
 
 impl Drop for CoreBlas {
@@ -2425,6 +2430,11 @@ impl dispatch::TlasInterface for CoreTlas {
     fn request_rebuild(&self) {
         // An invalid TLAS is reported by the build that uses it.
         let _ = self.context.0.tlas_request_rebuild(self.id);
+    }
+
+    fn sizes(&self) -> wgt::AccelerationStructureSizes {
+        // An invalid TLAS takes no memory; the build that uses it reports it.
+        self.context.0.tlas_sizes(self.id).unwrap_or_default()
     }
 }
 

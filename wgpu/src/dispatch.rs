@@ -300,9 +300,11 @@ pub trait BlasInterface: CommonTraits {
     fn prepare_compact_async(&self, callback: BlasCompactCallback);
     fn ready_for_compaction(&self) -> bool;
     fn request_rebuild(&self);
+    fn sizes(&self) -> wgt::AccelerationStructureSizes;
 }
 pub trait TlasInterface: CommonTraits {
     fn request_rebuild(&self);
+    fn sizes(&self) -> wgt::AccelerationStructureSizes;
 }
 pub trait QuerySetInterface: CommonTraits {
     fn destroy(&self);

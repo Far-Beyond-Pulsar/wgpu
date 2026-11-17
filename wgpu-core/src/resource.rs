@@ -2574,6 +2574,16 @@ impl RawResourceAccess for Blas {
 }
 
 impl Blas {
+    /// The device memory this BLAS takes.
+    pub(crate) fn sizes(&self) -> wgt::AccelerationStructureSizes {
+        wgt::AccelerationStructureSizes {
+            structure: self.size_info.acceleration_structure_size,
+            build_scratch: self.size_info.build_scratch_size,
+            update_scratch: self.size_info.update_scratch_size,
+            instances: 0,
+        }
+    }
+
     /// Make the next recorded build of this BLAS a full build, even if it could be an update.
     pub(crate) fn request_rebuild(&self) {
         self.rebuild_requested.store(true, Ordering::Relaxed);
@@ -2731,6 +2741,18 @@ impl RawResourceAccess for Tlas {
 }
 
 impl Tlas {
+    /// The device memory this TLAS takes, its instance buffer included.
+    pub(crate) fn sizes(&self) -> wgt::AccelerationStructureSizes {
+        wgt::AccelerationStructureSizes {
+            structure: self.size_info.acceleration_structure_size,
+            build_scratch: self.size_info.build_scratch_size,
+            update_scratch: self.size_info.update_scratch_size,
+            // As `Device::create_tlas` sized it.
+            instances: u64::from(self.device.alignments.raw_tlas_instance_size)
+                * u64::from(self.max_instance_count.max(1)),
+        }
+    }
+
     /// Make the next recorded build of this TLAS a full build, even if it could be an update.
     pub(crate) fn request_rebuild(&self) {
         self.rebuild_requested.store(true, Ordering::Relaxed);

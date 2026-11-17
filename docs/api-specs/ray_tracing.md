@@ -106,6 +106,11 @@ other [`Blas`] can be used for other things, including being rebuilt without aff
 [`Blas`] behaves largely like the [`Blas`] it was created from, except that it can be neither rebuilt, nor compacted
 again.
 
+[`Blas::sizes`] and [`Tlas::sizes`] report the device memory a structure takes: the structure itself (the compacted
+size for a compacted [`Blas`]), the scratch memory a build and an update need while they run, and for a [`Tlas`] the
+buffer its instances are uploaded into. They let an application account for acceleration-structure memory, and see what
+compaction saved.
+
 An example of compaction being run when [`Blas`]es are ready, this would be in a situation when memory was not a major
 problem, otherwise (e.g. if you get an out of memory error) you should compact immediately (and switching all
 non-compacted [`Blas`]es to compacted ones).
@@ -428,3 +433,5 @@ These are tags that can be added to a acceleration structure (`acceleration_stru
 | Tag             | Requirements                          | Description                                                            |
 | --------------- | ------------------------------------- | ---------------------------------------------------------------------- |
 | `vertex_return` | `enable wgpu_ray_query_vertex_return` | Allows getting the vertices of the hit triangle when using ray queries |
+[`Blas::sizes`]: https://wgpu.rs/doc/wgpu/struct.Blas.html#method.sizes
+[`Tlas::sizes`]: https://wgpu.rs/doc/wgpu/struct.Tlas.html#method.sizes

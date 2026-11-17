@@ -47,6 +47,7 @@ Bottom level categories:
 #### General
 
 - Acceleration structures created with `AccelerationStructureUpdateMode::PreferUpdate` are now updated (refit) in place when a build keeps the inputs of their last build: for a BLAS, the same geometries, size descriptors, index buffer and use of a transform, with new vertex, transform or AABB data; for a TLAS, the same instance count. Other builds remain full builds. `PreferUpdate` now requires `AccelerationStructureFlags::ALLOW_UPDATE`. `Blas::request_rebuild` and `Tlas::request_rebuild` make the next build a full one.
+- `Blas::sizes` and `Tlas::sizes` return an `AccelerationStructureSizes`: the bytes of the structure (compacted, for a compacted BLAS), the scratch bytes a build and an update need, and a TLAS's instance buffer bytes, for memory accounting.
 
 ### Bug Fixes
 

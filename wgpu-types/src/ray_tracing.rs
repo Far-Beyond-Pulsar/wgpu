@@ -90,6 +90,23 @@ pub enum AccelerationStructureUpdateMode {
     PreferUpdate,
 }
 
+/// The device memory an acceleration structure takes, as the backend sized it.
+///
+/// Returned by `Blas::sizes` and `Tlas::sizes` in `wgpu`, for memory accounting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct AccelerationStructureSizes {
+    /// Bytes of the acceleration structure itself. For a compacted BLAS, its compacted size.
+    pub structure: crate::BufferAddress,
+    /// Scratch bytes a full build needs. Scratch memory is allocated for the builds that use it
+    /// and freed once they are done.
+    pub build_scratch: crate::BufferAddress,
+    /// Scratch bytes an update (refit) needs.
+    pub update_scratch: crate::BufferAddress,
+    /// Bytes of the buffer a TLAS's instances are uploaded into; zero for a BLAS.
+    pub instances: crate::BufferAddress,
+}
+
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]

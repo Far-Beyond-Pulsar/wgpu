@@ -35,6 +35,12 @@ static_assertions::assert_impl_all!(AccelerationStructureGeometryFlags: Send, Sy
 pub type AccelerationStructureUpdateMode = wgt::AccelerationStructureUpdateMode;
 static_assertions::assert_impl_all!(AccelerationStructureUpdateMode: Send, Sync);
 
+/// The device memory an acceleration structure takes ([`Blas::sizes`], [`Tlas::sizes`]).
+///
+/// [`Tlas::sizes`]: crate::Tlas::sizes
+pub type AccelerationStructureSizes = wgt::AccelerationStructureSizes;
+static_assertions::assert_impl_all!(AccelerationStructureSizes: Send, Sync);
+
 /// Descriptor to create bottom level acceleration structures.
 pub type CreateBlasDescriptor<'a> = wgt::CreateBlasDescriptor<Label<'a>>;
 static_assertions::assert_impl_all!(CreateBlasDescriptor<'_>: Send, Sync);
@@ -353,5 +359,14 @@ impl Blas {
     /// [`CommandEncoder::build_acceleration_structures`]: crate::CommandEncoder::build_acceleration_structures
     pub fn request_rebuild(&self) {
         self.inner.request_rebuild();
+    }
+
+    /// The device memory this BLAS takes: its structure (the compacted size, for a BLAS
+    /// returned by [`Queue::compact_blas`]) and the scratch memory a build or an update of it
+    /// needs while it runs.
+    ///
+    /// [`Queue::compact_blas`]: crate::Queue::compact_blas
+    pub fn sizes(&self) -> AccelerationStructureSizes {
+        self.inner.sizes()
     }
 }

@@ -477,6 +477,22 @@ impl Global {
         Ok(())
     }
 
+    /// The device memory a BLAS takes.
+    pub fn blas_sizes(
+        &self,
+        blas_id: BlasId,
+    ) -> Result<wgt::AccelerationStructureSizes, InvalidResourceError> {
+        Ok(self.hub.blas_s.get(blas_id).get()?.sizes())
+    }
+
+    /// The device memory a TLAS takes, its instance buffer included.
+    pub fn tlas_sizes(
+        &self,
+        tlas_id: TlasId,
+    ) -> Result<wgt::AccelerationStructureSizes, InvalidResourceError> {
+        Ok(self.hub.tlas_s.get(tlas_id).get()?.sizes())
+    }
+
     pub fn ready_for_compaction(&self, blas_id: BlasId) -> Result<bool, InvalidResourceError> {
         profiling::scope!("Blas::prepare_compact_async");
         api_log!("Blas::prepare_compact_async {blas_id:?}");

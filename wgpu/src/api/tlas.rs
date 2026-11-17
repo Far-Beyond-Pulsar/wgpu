@@ -106,6 +106,12 @@ impl Tlas {
         self.inner.request_rebuild();
     }
 
+    /// The device memory this TLAS takes: its structure, the buffer its instances are uploaded
+    /// into, and the scratch memory a build or an update of it needs while it runs.
+    pub fn sizes(&self) -> crate::AccelerationStructureSizes {
+        self.inner.sizes()
+    }
+
     /// Get a reference to all instances.
     pub fn get(&self) -> &[Option<TlasInstance>] {
         &self.instances

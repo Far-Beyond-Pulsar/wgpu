@@ -28,6 +28,7 @@ pub fn all_tests(tests: &mut Vec<GpuTestInitializer>) {
         BLAS_REQUESTED_REBUILD,
         PREFER_UPDATE_WITHOUT_ALLOW_UPDATE,
         COMPACT_WHILE_SUBMITTING,
+        SIZES,
     ]);
 }
 
@@ -511,4 +512,77 @@ fn compact_while_submitting(ctx: TestingContext) {
     compactor.join().unwrap();
     submitter.join().unwrap();
     ctx.device.poll(PollType::wait_indefinitely()).unwrap();
+}
+
+#[gpu_test]
+static SIZES: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(update_test_parameters())
+    .run_sync(sizes);
+
+/// `Blas::sizes` and `Tlas::sizes` report the memory the backend sized, a compacted BLAS its
+/// compacted size, and a TLAS its instance buffer.
+fn sizes(ctx: TestingContext) {
+    let mut scene = UpdateScene::new(
+        &ctx,
+        AccelerationStructureUpdateMode::Build,
+        AccelerationStructureUpdateMode::PreferUpdate,
+    );
+    let tlas = scene.tlas.sizes();
+    assert!(tlas.structure > 0 && tlas.build_scratch > 0, "{tlas:?}");
+    assert!(tlas.instances > 0 && tlas.instances % 2 == 0, "{tlas:?}");
+
+    let blas = ctx.device.create_blas(
+        &CreateBlasDescriptor {
+            label: Some("compacted BLAS"),
+            flags: AccelerationStructureFlags::PREFER_FAST_TRACE
+                | AccelerationStructureFlags::ALLOW_COMPACTION,
+            update_mode: AccelerationStructureUpdateMode::Build,
+        },
+        BlasGeometrySizeDescriptors::Triangles {
+            descriptors: vec![size_descriptor(MAX_VERTICES)],
+        },
+    );
+    let built = blas.sizes();
+    assert!(built.structure > 0 && built.build_scratch > 0, "{built:?}");
+    assert_eq!(built.instances, 0);
+
+    scene.write_triangles(&ctx, &[triangle(0.0), triangle(30.0), triangle(50.0)]);
+    let size = size_descriptor(MAX_VERTICES);
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&CommandEncoderDescriptor::default());
+    encoder.build_acceleration_structures(
+        [&BlasBuildEntry {
+            blas: &blas,
+            geometry: BlasGeometries::TriangleGeometries(vec![BlasTriangleGeometry {
+                size: &size,
+                vertex_buffer: &scene.vertices,
+                first_vertex: 0,
+                vertex_stride: mem::size_of::<[f32; 3]>() as BufferAddress,
+                index_buffer: None,
+                first_index: None,
+                transform_buffer: None,
+                transform_buffer_offset: None,
+            }]),
+        }],
+        [],
+    );
+    ctx.queue.submit([encoder.finish()]);
+    blas.prepare_compaction_async(|result| result.unwrap());
+    ctx.device.poll(PollType::wait_indefinitely()).unwrap();
+    assert!(blas.ready_for_compaction());
+
+    let compacted = ctx.queue.compact_blas(&blas);
+    let after = compacted.sizes();
+    assert!(
+        after.structure > 0 && after.structure <= built.structure,
+        "compacted {after:?}, built {built:?}"
+    );
+    // The source keeps its own size.
+    assert_eq!(blas.sizes(), built);
+
+    // The compacted BLAS traces.
+    scene.tlas[0] = Some(TlasInstance::new(&compacted, IDENTITY, 0, 0xFF));
+    ctx.queue.submit([scene.encode_tlas_build(&ctx)]);
+    assert_eq!(scene.trace(&ctx), HIT_A);
 }
