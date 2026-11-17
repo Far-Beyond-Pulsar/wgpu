@@ -1781,6 +1781,21 @@ impl Queue {
         let mut size_info = blas.size_info;
         size_info.acceleration_structure_size = size;
 
+        // Lock order: `Device::command_indices` before `Queue::pending_writes`, as in
+        // `Queue::allocate_submission` (submit, present, flushes) and the lock rank table. Taking
+        // `pending_writes` first deadlocks against a submit or present on another thread, which
+        // holds `command_indices` while it waits for `pending_writes`.
+        //
+        // The compacted BLAS takes a fresh build index: TLAS builds validated after this
+        // allocate later indices, so they may use it. Its copy lands in `pending_writes`, which is
+        // submitted before any command buffer that can reference the returned BLAS.
+        let built_index = {
+            let mut command_indices = device.command_indices.write();
+            command_indices.next_acceleration_structure_build_command_index += 1;
+            NonZeroU64::new(command_indices.next_acceleration_structure_build_command_index)
+                .unwrap()
+        };
+
         let mut pending_writes = self.pending_writes.lock();
         let cmd_buf_raw = pending_writes.activate();
 
@@ -1813,12 +1828,6 @@ impl Queue {
         };
 
         drop(snatch_guard);
-
-        let mut command_indices_lock = device.command_indices.write();
-        command_indices_lock.next_acceleration_structure_build_command_index += 1;
-        let built_index =
-            NonZeroU64::new(command_indices_lock.next_acceleration_structure_build_command_index)
-                .unwrap();
 
         let new_blas = Arc::new(Blas {
             raw: Snatchable::new(raw),
