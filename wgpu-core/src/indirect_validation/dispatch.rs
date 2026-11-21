@@ -10,7 +10,7 @@ use core::num::NonZeroU64;
 /// This machinery requires the following limits:
 ///
 /// - max_bind_groups: 2,
-/// - max_dynamic_storage_buffers_per_pipeline_layout: 1,
+/// - max_dynamic_storage_buffers_per_pipeline_layout: 2,
 /// - max_storage_buffers_per_shader_stage: 2,
 /// - max_storage_buffer_binding_size: 3 * min_storage_buffer_offset_alignment,
 /// - max_immediate_size: 4,
@@ -27,13 +27,28 @@ pub(crate) struct Dispatch {
     pipeline: Box<dyn hal::DynComputePipeline>,
     dst_buffer: Box<dyn hal::DynBuffer>,
     dst_bind_group: Box<dyn hal::DynBindGroup>,
+    /// The distance between two slots of `dst_buffer` (HELIO PATCH: the
+    /// arguments of a compute pass's overlapping span, each validated into
+    /// a slot of its own).
+    dst_stride: u64,
 }
+
+/// HELIO PATCH: how many indirect dispatches of one overlapping span
+/// (`ComputePass::begin_overlap`) are validated together, each into a slot
+/// of the destination buffer. Slot 0 is the one a dispatch outside a span
+/// validates into; past the last slot, a span's dispatches are validated one
+/// by one, as outside a span.
+pub const SPAN_SLOTS: u32 = 256;
 
 pub struct Params<'a> {
     pub pipeline_layout: &'a dyn hal::DynPipelineLayout,
     pub pipeline: &'a dyn hal::DynComputePipeline,
     pub dst_buffer: &'a dyn hal::DynBuffer,
     pub dst_bind_group: &'a dyn hal::DynBindGroup,
+    /// The distance between two slots of `dst_buffer`: slot `k`'s arguments
+    /// are at `k * dst_stride`, the dynamic offset of `dst_bind_group` that
+    /// writes them.
+    pub dst_stride: u64,
     pub aligned_offset: u64,
     pub offset_remainder: u64,
 }
@@ -141,7 +156,7 @@ impl Dispatch {
                 visibility: wgt::ShaderStages::COMPUTE,
                 ty: wgt::BindingType::Buffer {
                     ty: wgt::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false,
+                    has_dynamic_offset: true,
                     min_binding_size: Some(DST_BUFFER_SIZE),
                 },
                 count: None,
@@ -224,12 +239,17 @@ impl Dispatch {
                 }
             })?;
 
+        // A slot a dispatch of an overlapping span (slot 0 also every
+        // dispatch outside one), a storage offset alignment apart.
+        let dst_stride = DST_BUFFER_SIZE
+            .get()
+            .next_multiple_of(u64::from(limits.min_storage_buffer_offset_alignment));
         let dst_buffer_desc = hal::BufferDescriptor {
             label: hal_label(
                 Some("(wgpu internal) Indirect dispatch validation destination buffer"),
                 instance_flags,
             ),
-            size: DST_BUFFER_SIZE.get(),
+            size: dst_stride * u64::from(SPAN_SLOTS - 1) + DST_BUFFER_SIZE.get(),
             usage: wgt::BufferUses::INDIRECT | wgt::BufferUses::STORAGE_READ_WRITE,
             memory_flags: hal::MemoryFlags::empty(),
         };
@@ -272,6 +292,7 @@ impl Dispatch {
             pipeline,
             dst_buffer,
             dst_bind_group,
+            dst_stride,
         })
     }
 
@@ -342,6 +363,7 @@ impl Dispatch {
             pipeline: self.pipeline.as_ref(),
             dst_buffer: self.dst_buffer.as_ref(),
             dst_bind_group: self.dst_bind_group.as_ref(),
+            dst_stride: self.dst_stride,
             aligned_offset,
             offset_remainder,
         }
@@ -356,6 +378,7 @@ impl Dispatch {
             pipeline,
             dst_buffer,
             dst_bind_group,
+            dst_stride: _,
         } = self;
 
         unsafe {

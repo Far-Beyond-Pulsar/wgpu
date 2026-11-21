@@ -290,6 +290,15 @@ pub(crate) struct BufferTracker {
 }
 
 impl BufferTracker {
+    /// HELIO PATCH: drops the pending transitions `keep` refuses (a compute
+    /// pass's overlapping span).
+    pub fn retain_transitions(
+        &mut self,
+        mut keep: impl FnMut(&hal::StateTransition<BufferUses>) -> bool,
+    ) {
+        self.temp.retain(|pending| keep(&pending.usage));
+    }
+
     pub fn new(ordered_uses_mask: BufferUses) -> Self {
         Self {
             start: Vec::new(),

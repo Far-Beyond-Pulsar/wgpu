@@ -2102,6 +2102,9 @@ pub enum PassErrorScope {
     EndPipelineStatisticsQuery,
     #[error("In a transition_resources command")]
     TransitionResources,
+    /// HELIO PATCH: `begin_overlap` / `end_overlap`.
+    #[error("In a begin_overlap or end_overlap command")]
+    Overlap,
     #[error("In a execute_bundle command")]
     ExecuteBundle,
     #[error("In a dispatch command, indirect:{indirect}")]

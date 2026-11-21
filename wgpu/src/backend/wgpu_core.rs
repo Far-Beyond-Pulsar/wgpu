@@ -3156,6 +3156,28 @@ impl dispatch::ComputePassInterface for CoreComputePass {
         }
     }
 
+    fn begin_overlap(&mut self) {
+        if let Err(cause) = self.context.0.compute_pass_begin_overlap(&mut self.pass) {
+            self.context.handle_error(
+                &self.error_sink,
+                cause,
+                self.pass.label(),
+                "ComputePass::begin_overlap",
+            );
+        }
+    }
+
+    fn end_overlap(&mut self) {
+        if let Err(cause) = self.context.0.compute_pass_end_overlap(&mut self.pass) {
+            self.context.handle_error(
+                &self.error_sink,
+                cause,
+                self.pass.label(),
+                "ComputePass::end_overlap",
+            );
+        }
+    }
+
     fn dispatch_workgroups(&mut self, x: u32, y: u32, z: u32) {
         if let Err(cause) = self
             .context

@@ -412,6 +412,12 @@ pub trait ComputePassInterface: CommonTraits + Drop {
     fn begin_pipeline_statistics_query(&mut self, query_set: &DispatchQuerySet, query_index: u32);
     fn end_pipeline_statistics_query(&mut self);
 
+    /// HELIO PATCH: `ComputePass::begin_overlap`. A backend that cannot run
+    /// dispatches without barriers between them ignores it (always correct).
+    fn begin_overlap(&mut self) {}
+    /// HELIO PATCH: `ComputePass::end_overlap`.
+    fn end_overlap(&mut self) {}
+
     fn dispatch_workgroups(&mut self, x: u32, y: u32, z: u32);
     fn dispatch_workgroups_indirect(
         &mut self,

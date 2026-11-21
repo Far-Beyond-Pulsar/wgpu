@@ -71,6 +71,15 @@ pub enum ComputeCommand<R: ReferenceType> {
         buffer_transitions: Vec<wgt::BufferTransition<R::Buffer>>,
         texture_transitions: Vec<wgt::TextureTransition<R::TextureView>>,
     },
+
+    /// HELIO PATCH: the dispatches up to the next [`Self::EndOverlap`] (or
+    /// the pass's end) may run concurrently: no barrier between two of them
+    /// for a resource both use as writable storage, and their indirect
+    /// arguments validated together before the first.
+    BeginOverlap,
+
+    /// HELIO PATCH: ends the span [`Self::BeginOverlap`] began.
+    EndOverlap,
 }
 
 /// cbindgen:ignore

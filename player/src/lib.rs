@@ -1045,6 +1045,8 @@ impl Player {
                 query_index,
             },
             C::EndPipelineStatisticsQuery => C::EndPipelineStatisticsQuery,
+            C::BeginOverlap => C::BeginOverlap,
+            C::EndOverlap => C::EndOverlap,
             C::TransitionResources {
                 buffer_transitions,
                 texture_transitions,

@@ -195,6 +195,12 @@ pub enum ComputePassErrorInner {
     MissingDownlevelFlags(#[from] MissingDownlevelFlags),
     #[error("The compute pass has already been ended and no further commands can be recorded")]
     PassEnded,
+    /// HELIO PATCH.
+    #[error("begin_overlap called inside an overlapping span")]
+    OverlapAlreadyBegun,
+    /// HELIO PATCH.
+    #[error("end_overlap called outside an overlapping span")]
+    OverlapNotBegun,
     #[error(transparent)]
     InvalidResource(#[from] InvalidResourceError),
     #[error(transparent)]
@@ -257,6 +263,8 @@ impl WebGpuError for ComputePassError {
             | ComputePassErrorInner::BindGroupIndexOutOfRange { .. }
             | ComputePassErrorInner::UnalignedIndirectBufferOffset(_)
             | ComputePassErrorInner::IndirectBufferOverrun { .. }
+            | ComputePassErrorInner::OverlapAlreadyBegun
+            | ComputePassErrorInner::OverlapNotBegun
             | ComputePassErrorInner::PassEnded => ErrorType::Validation,
         }
     }
@@ -276,6 +284,24 @@ struct State<'scope, 'snatch_guard, 'cmd_enc> {
     immediate_slots_set: naga::valid::ImmediateSlots,
 
     intermediate_trackers: Tracker,
+
+    /// HELIO PATCH: the overlapping span the pass is in (`begin_overlap`).
+    overlap: Option<Overlap>,
+}
+
+/// HELIO PATCH: an overlapping span of a compute pass
+/// (`ComputePass::begin_overlap`). Its dispatches may run concurrently: a
+/// resource that stays in a writable storage state from one of them to the
+/// next takes no barrier between them (the caller states they do not read
+/// what each other writes), and their indirect arguments were validated
+/// together when it began, each into a slot of the validation's
+/// destination buffer, so no validation dispatch and its two barriers sit
+/// between them. Transitions into and out of a writable state keep their
+/// barriers, and the dispatch after the span sees every write of it.
+struct Overlap {
+    /// The span's indirect dispatches, in order, with the slot each one's
+    /// arguments were validated into (front: the next one).
+    validated: alloc::collections::VecDeque<(Arc<Buffer>, u64, u32)>,
 }
 
 impl<'scope, 'snatch_guard, 'cmd_enc> State<'scope, 'snatch_guard, 'cmd_enc> {
@@ -381,6 +407,21 @@ impl<'scope, 'snatch_guard, 'cmd_enc> State<'scope, 'snatch_guard, 'cmd_enc> {
         }
 
         flush_bindings_helper(&mut self.pass)?;
+
+        // HELIO PATCH: in an overlapping span, a resource that stays in a
+        // writable storage state takes no barrier between dispatches.
+        if self.overlap.is_some() {
+            self.intermediate_trackers.buffers.retain_transitions(|t| {
+                !(t.from == t.to && wgt::BufferUses::STORAGE_READ_WRITE.contains(t.to))
+            });
+            self.intermediate_trackers.textures.retain_transitions(|t| {
+                !(t.from == t.to
+                    && (wgt::TextureUses::STORAGE_WRITE_ONLY
+                        | wgt::TextureUses::STORAGE_READ_WRITE
+                        | wgt::TextureUses::STORAGE_ATOMIC)
+                        .contains(t.to))
+            });
+        }
 
         CommandEncoder::drain_barriers(
             self.pass.base.raw_encoder,
@@ -712,6 +753,8 @@ pub(super) fn encode_compute_pass(
             device.ordered_buffer_usages,
             device.ordered_texture_usages,
         ),
+
+        overlap: None,
     };
 
     let indices = &device.tracker_indices;
@@ -785,7 +828,8 @@ pub(super) fn encode_compute_pass(
         state.pass.base.raw_encoder.begin_compute_pass(&hal_desc);
     }
 
-    for command in base.commands.drain(..) {
+    let mut commands = core::mem::take(&mut base.commands).into_iter();
+    while let Some(command) = commands.next() {
         match command {
             ArcComputeCommand::SetBindGroup {
                 index,
@@ -900,6 +944,31 @@ pub(super) fn encode_compute_pass(
                 let scope = PassErrorScope::TransitionResources;
                 transition_resources(&mut state, buffer_transitions, texture_transitions)
                     .map_pass_err(scope)?;
+            }
+            ArcComputeCommand::BeginOverlap => {
+                let scope = PassErrorScope::Overlap;
+                if state.overlap.is_some() {
+                    return Err(ComputePassErrorInner::OverlapAlreadyBegun.map_pass_err(scope));
+                }
+                // The span's indirect dispatches, up to its end.
+                let span: Vec<(Arc<Buffer>, u64)> = commands
+                    .as_slice()
+                    .iter()
+                    .take_while(|c| !matches!(c, ArcComputeCommand::EndOverlap))
+                    .filter_map(|c| match c {
+                        ArcComputeCommand::DispatchWorkgroupsIndirect { buffer, offset } => {
+                            Some((buffer.clone(), *offset))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                begin_overlap(&mut state, device, span).map_pass_err(scope)?;
+            }
+            ArcComputeCommand::EndOverlap => {
+                if state.overlap.take().is_none() {
+                    return Err(ComputePassErrorInner::OverlapNotBegun
+                        .map_pass_err(PassErrorScope::Overlap));
+                }
             }
         }
     }
@@ -1034,6 +1103,146 @@ fn dispatch_workgroups(state: &mut State, groups: [u32; 3]) -> Result<(), Comput
     Ok(())
 }
 
+/// HELIO PATCH: begins an overlapping span ([`Overlap`]) whose indirect
+/// dispatches are `span` (in order): their arguments validated now, each into
+/// a slot of its own, with one barrier before the first dispatch reads them.
+/// Arguments the dispatch itself will refuse are left to it, and those past
+/// the slots are validated one by one, as outside a span.
+fn begin_overlap(
+    state: &mut State,
+    device: &Arc<Device>,
+    span: Vec<(Arc<Buffer>, u64)>,
+) -> Result<(), ComputePassErrorInner> {
+    let mut validated = alloc::collections::VecDeque::new();
+    if let Some(ref indirect_validation) = device.indirect_validation {
+        let args_size = size_of::<wgt::DispatchIndirectArgs>() as u64;
+        let guard = state.pass.base.snatch_guard;
+        let span: Vec<(Arc<Buffer>, u64)> = span
+            .into_iter()
+            .filter(|(buffer, offset)| {
+                buffer.same_device(device).is_ok()
+                    && buffer.check_usage(wgt::BufferUsages::INDIRECT).is_ok()
+                    && offset.is_multiple_of(4)
+                    && buffer.size >= args_size
+                    && buffer.size - args_size >= *offset
+                    && buffer.check_destroyed(guard).is_ok()
+            })
+            .take(crate::indirect_validation::SPAN_SLOTS as usize - 1)
+            .collect();
+        if !span.is_empty() {
+            let mut sources = Vec::new();
+            for (buffer, _) in &span {
+                if let Some(transition) = state
+                    .intermediate_trackers
+                    .buffers
+                    .set_single(buffer, wgt::BufferUses::STORAGE_READ_ONLY)
+                {
+                    sources.push(transition.into_hal(buffer, guard));
+                }
+            }
+            let first = indirect_validation
+                .dispatch
+                .params(&device.limits, 0, span[0].0.size);
+            let raw = &mut *state.pass.base.raw_encoder;
+            unsafe {
+                raw.transition_buffers(sources.as_slice());
+                raw.transition_buffers(&[hal::BufferBarrier {
+                    buffer: first.dst_buffer,
+                    usage: hal::StateTransition {
+                        from: wgt::BufferUses::INDIRECT,
+                        to: wgt::BufferUses::STORAGE_READ_WRITE,
+                    },
+                }]);
+                raw.set_compute_pipeline(first.pipeline);
+            }
+            // Slot 0 is a dispatch's outside a span; each of the span's
+            // writes its own, so they need no barrier between them.
+            for (k, (buffer, offset)) in span.iter().enumerate() {
+                let slot = k as u32 + 1;
+                let params =
+                    indirect_validation
+                        .dispatch
+                        .params(&device.limits, *offset, buffer.size);
+                unsafe {
+                    raw.set_immediates(
+                        params.pipeline_layout,
+                        0,
+                        &[params.offset_remainder as u32 / 4],
+                    );
+                    raw.set_bind_group(
+                        params.pipeline_layout,
+                        0,
+                        params.dst_bind_group,
+                        &[(u64::from(slot) * params.dst_stride) as u32],
+                    );
+                    raw.set_bind_group(
+                        params.pipeline_layout,
+                        1,
+                        buffer
+                            .indirect_validation_bind_groups
+                            .get(guard)
+                            .unwrap()
+                            .dispatch
+                            .as_ref(),
+                        &[params.aligned_offset as u32],
+                    );
+                    raw.dispatch_workgroups([1, 1, 1]);
+                }
+                validated.push_back((buffer.clone(), *offset, slot));
+            }
+            unsafe {
+                raw.transition_buffers(&[hal::BufferBarrier {
+                    buffer: first.dst_buffer,
+                    usage: hal::StateTransition {
+                        from: wgt::BufferUses::STORAGE_READ_WRITE,
+                        to: wgt::BufferUses::INDIRECT,
+                    },
+                }]);
+            }
+            restore_pipeline_state(state)?;
+        }
+    }
+    state.overlap = Some(Overlap { validated });
+    Ok(())
+}
+
+/// Binds the pass's pipeline, immediates and bind groups again after an
+/// internal dispatch (indirect validation) replaced them.
+fn restore_pipeline_state(state: &mut State) -> Result<(), ComputePassErrorInner> {
+    let Some(pipeline) = state.pipeline.as_ref() else {
+        return Ok(());
+    };
+    unsafe {
+        state
+            .pass
+            .base
+            .raw_encoder
+            .set_compute_pipeline(pipeline.raw()?);
+    }
+    let pipeline_layout = pipeline.layout()?;
+    if !state.immediates.is_empty() {
+        unsafe {
+            state.pass.base.raw_encoder.set_immediates(
+                pipeline_layout.raw()?,
+                0,
+                &state.immediates,
+            );
+        }
+    }
+    for (i, group, dynamic_offsets) in state.pass.binder.list_valid() {
+        let raw_bg = group.try_raw(state.pass.base.snatch_guard)?;
+        unsafe {
+            state.pass.base.raw_encoder.set_bind_group(
+                pipeline_layout.raw()?,
+                i as u32,
+                raw_bg,
+                dynamic_offsets,
+            );
+        }
+    }
+    Ok(())
+}
+
 fn dispatch_workgroups_indirect(
     state: &mut State,
     device: &Arc<Device>,
@@ -1078,7 +1287,33 @@ fn dispatch_workgroups_indirect(
         ),
     );
 
-    if let Some(ref indirect_validation) = state.pass.base.device.indirect_validation {
+    // HELIO PATCH: in an overlapping span, the arguments were validated
+    // when it began: read from their slot.
+    let slot = state.overlap.as_ref().and_then(|overlap| {
+        let (validated, at, slot) = overlap.validated.front()?;
+        (Arc::ptr_eq(validated, &buffer) && *at == offset).then_some(*slot)
+    });
+    if let (Some(slot), Some(indirect_validation)) =
+        (slot, state.pass.base.device.indirect_validation.as_ref())
+    {
+        if let Some(overlap) = state.overlap.as_mut() {
+            overlap.validated.pop_front();
+        }
+        let params = indirect_validation.dispatch.params(
+            &state.pass.base.device.limits,
+            offset,
+            buffer.size,
+        );
+        let (dst_buffer, at) = (params.dst_buffer, u64::from(slot) * params.dst_stride);
+        state.flush_bindings(Some(&buffer), false)?;
+        unsafe {
+            state
+                .pass
+                .base
+                .raw_encoder
+                .dispatch_workgroups_indirect(dst_buffer, at);
+        }
+    } else if let Some(ref indirect_validation) = state.pass.base.device.indirect_validation {
         let params = indirect_validation.dispatch.params(
             &state.pass.base.device.limits,
             offset,
@@ -1106,7 +1341,7 @@ fn dispatch_workgroups_indirect(
                 params.pipeline_layout,
                 0,
                 params.dst_bind_group,
-                &[],
+                &[0],
             );
         }
         unsafe {
@@ -1156,41 +1391,7 @@ fn dispatch_workgroups_indirect(
         }
 
         // reset state
-        {
-            let pipeline = state.pipeline.as_ref().unwrap();
-
-            unsafe {
-                state
-                    .pass
-                    .base
-                    .raw_encoder
-                    .set_compute_pipeline(pipeline.raw()?);
-            }
-
-            let pipeline_layout = pipeline.layout()?;
-
-            if !state.immediates.is_empty() {
-                unsafe {
-                    state.pass.base.raw_encoder.set_immediates(
-                        pipeline_layout.raw()?,
-                        0,
-                        &state.immediates,
-                    );
-                }
-            }
-
-            for (i, group, dynamic_offsets) in state.pass.binder.list_valid() {
-                let raw_bg = group.try_raw(state.pass.base.snatch_guard)?;
-                unsafe {
-                    state.pass.base.raw_encoder.set_bind_group(
-                        pipeline_layout.raw()?,
-                        i as u32,
-                        raw_bg,
-                        dynamic_offsets,
-                    );
-                }
-            }
-        }
+        restore_pipeline_state(state)?;
 
         unsafe {
             state
@@ -1611,6 +1812,22 @@ impl Global {
             .commands
             .push(ArcComputeCommand::EndPipelineStatisticsQuery);
 
+        Ok(())
+    }
+
+    /// HELIO PATCH: begins an overlapping span (`ComputePass::begin_overlap`).
+    pub fn compute_pass_begin_overlap(&self, pass: &mut ComputePass) -> Result<(), PassStateError> {
+        pass_base!(pass, PassErrorScope::Overlap)
+            .commands
+            .push(ArcComputeCommand::BeginOverlap);
+        Ok(())
+    }
+
+    /// HELIO PATCH: ends an overlapping span (`ComputePass::end_overlap`).
+    pub fn compute_pass_end_overlap(&self, pass: &mut ComputePass) -> Result<(), PassStateError> {
+        pass_base!(pass, PassErrorScope::Overlap)
+            .commands
+            .push(ArcComputeCommand::EndOverlap);
         Ok(())
     }
 

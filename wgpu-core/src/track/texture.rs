@@ -432,6 +432,15 @@ pub(crate) struct TextureTracker {
 }
 
 impl TextureTracker {
+    /// HELIO PATCH: drops the pending transitions `keep` refuses (a compute
+    /// pass's overlapping span).
+    pub fn retain_transitions(
+        &mut self,
+        mut keep: impl FnMut(&hal::StateTransition<TextureUses>) -> bool,
+    ) {
+        self.temp.retain(|pending| keep(&pending.usage));
+    }
+
     pub fn new(ordered_uses_mask: TextureUses) -> Self {
         Self {
             start_set: TextureStateSet::new(),

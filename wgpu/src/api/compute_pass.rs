@@ -205,6 +205,32 @@ impl ComputePass<'_> {
     pub fn end_pipeline_statistics_query(&mut self) {
         self.inner.end_pipeline_statistics_query();
     }
+
+    /// HELIO PATCH: begins a span of dispatches that may run concurrently,
+    /// ended by [`Self::end_overlap`] or the pass's end.
+    ///
+    /// Within the span, a buffer or texture that stays in a writable storage
+    /// state from one dispatch to the next gets no barrier between them: the
+    /// caller states that no dispatch of the span reads what another of it
+    /// writes (they write disjoint ranges, or only with atomics). Transitions
+    /// into and out of that state keep their barriers, so the first dispatch
+    /// after the span sees every write of it. The span's indirect dispatches
+    /// have their arguments validated together when it begins (as each one
+    /// is otherwise, with a dispatch and two barriers of its own before it),
+    /// so arguments a dispatch of the span would write for a later one are
+    /// not seen by it.
+    ///
+    /// This is D3D12's and Vulkan's omitted UAV barrier between independent
+    /// dispatches (Unreal's `BeginUAVOverlap`, RDG's `SkipBarrier` UAVs). A
+    /// backend that cannot express it keeps its barriers. Spans do not nest.
+    pub fn begin_overlap(&mut self) {
+        self.inner.begin_overlap();
+    }
+
+    /// HELIO PATCH: ends the span [`Self::begin_overlap`] began.
+    pub fn end_overlap(&mut self) {
+        self.inner.end_overlap();
+    }
 }
 
 /// Describes the timestamp writes of a compute pass.

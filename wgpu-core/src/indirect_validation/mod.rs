@@ -9,7 +9,7 @@ mod dispatch;
 mod draw;
 mod utils;
 
-pub(crate) use dispatch::Dispatch;
+pub(crate) use dispatch::{Dispatch, SPAN_SLOTS};
 pub(crate) use draw::{Draw, DrawBatcher, DrawResources};
 
 #[derive(Clone, Debug, Error)]
