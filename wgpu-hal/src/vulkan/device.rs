@@ -1017,7 +1017,7 @@ impl crate::Device for super::Device {
                 unsafe { self.shared.raw.destroy_buffer(raw, None) };
             })?;
 
-        let name = desc.label.unwrap_or("Unlabeled buffer");
+        let name = wgt::allocation_owner::allocation_name(desc.label.unwrap_or("Unlabeled buffer"));
 
         if desc
             .usage
@@ -1033,7 +1033,7 @@ impl crate::Device for super::Device {
             .mem_allocator
             .lock()
             .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
-                name,
+                name: &name,
                 requirements: vk::MemoryRequirements {
                     memory_type_bits: requirements.memory_type_bits & self.valid_ash_memory_types,
                     ..requirements
@@ -1187,13 +1187,13 @@ impl crate::Device for super::Device {
             unsafe { self.shared.raw.destroy_image(image.raw, None) };
         })?;
 
-        let name = desc.label.unwrap_or("Unlabeled texture");
+        let name = wgt::allocation_owner::allocation_name(desc.label.unwrap_or("Unlabeled texture"));
 
         let allocation = self
             .mem_allocator
             .lock()
             .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
-                name,
+                name: &name,
                 requirements: vk::MemoryRequirements {
                     memory_type_bits: image.requirements.memory_type_bits
                         & self.valid_ash_memory_types,
@@ -2833,15 +2833,15 @@ impl crate::Device for super::Device {
                 self.shared.raw.destroy_buffer(raw_buffer, None);
             })?;
 
-            let name = desc
-                .label
-                .unwrap_or("Unlabeled acceleration structure buffer");
+            let name = wgt::allocation_owner::allocation_name(
+                desc.label.unwrap_or("Unlabeled acceleration structure buffer"),
+                );
 
             let allocation = self
                 .mem_allocator
                 .lock()
                 .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
-                    name,
+                    name: &name,
                     requirements,
                     location: gpu_allocator::MemoryLocation::GpuOnly,
                     linear: true, // Buffers are always linear

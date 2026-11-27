@@ -27,6 +27,8 @@ use core::{fmt, hash::Hash, time::Duration};
 use serde::{Deserialize, Serialize};
 
 mod adapter;
+#[cfg(feature = "std")]
+pub mod allocation_owner;
 pub mod assertions;
 mod backend;
 mod binding;

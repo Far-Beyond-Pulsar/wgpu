@@ -89,6 +89,7 @@ metal = [
     "dep:raw-window-metal",
 ]
 vulkan = [
+    "wgpu-types/std", # HELIO PATCH: allocation owners (`wgt::allocation_owner`).
     "naga/spv-out",
     "dep:android_system_properties",
     "dep:arrayvec",
@@ -136,6 +137,7 @@ gles = [
 ]
 ## Enables the DX12 backend when targeting Windows.
 dx12 = [
+    "wgpu-types/std", # HELIO PATCH: allocation owners (`wgt::allocation_owner`).
     "dep:arrayvec",
     "dep:bit-set",
     "dep:bytemuck",

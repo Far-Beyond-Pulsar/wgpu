@@ -287,12 +287,12 @@ impl<'a> DeviceAllocationContext<'a> {
         allocation_info: Direct3D12::D3D12_RESOURCE_ALLOCATION_INFO,
         location: MemoryLocation,
     ) -> Result<(Direct3D12::ID3D12Resource, Allocation), crate::DeviceError> {
-        let name = desc.label.unwrap_or("Unlabeled buffer");
+        let name = wgt::allocation_owner::allocation_name(desc.label.unwrap_or("Unlabeled buffer"));
 
         let mut allocator = self.mem_allocator.inner.lock();
 
         let allocation_desc = AllocationCreateDesc {
-            name,
+            name: &name,
             location,
             size: allocation_info.SizeInBytes,
             alignment: allocation_info.Alignment,
@@ -326,12 +326,12 @@ impl<'a> DeviceAllocationContext<'a> {
         allocation_info: Direct3D12::D3D12_RESOURCE_ALLOCATION_INFO,
         location: MemoryLocation,
     ) -> Result<(Direct3D12::ID3D12Resource, Allocation), crate::DeviceError> {
-        let name = desc.label.unwrap_or("Unlabeled texture");
+        let name = wgt::allocation_owner::allocation_name(desc.label.unwrap_or("Unlabeled texture"));
 
         let mut allocator = self.mem_allocator.inner.lock();
 
         let allocation_desc = AllocationCreateDesc {
-            name,
+            name: &name,
             location,
             size: allocation_info.SizeInBytes,
             alignment: allocation_info.Alignment,
@@ -365,12 +365,12 @@ impl<'a> DeviceAllocationContext<'a> {
         allocation_info: Direct3D12::D3D12_RESOURCE_ALLOCATION_INFO,
         location: MemoryLocation,
     ) -> Result<(Direct3D12::ID3D12Resource, Allocation), crate::DeviceError> {
-        let name = desc.label.unwrap_or("Unlabeled acceleration structure");
+        let name = wgt::allocation_owner::allocation_name(desc.label.unwrap_or("Unlabeled acceleration structure"));
 
         let mut allocator = self.mem_allocator.inner.lock();
 
         let allocation_desc = AllocationCreateDesc {
-            name,
+            name: &name,
             location,
             size: allocation_info.SizeInBytes,
             alignment: allocation_info.Alignment,
