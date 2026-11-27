@@ -350,6 +350,19 @@ fn process_mesh_shader_overrides(
     Ok(())
 }
 
+/// The value for `key`, found by comparing keys rather than by hashing.
+///
+/// HELIO PATCH: the map may have been filled by another loaded copy of this
+/// crate (a host and a library it loads, sharing one device). The default
+/// hasher's seed is a static of each copy, so a hashed lookup here would miss
+/// every key of such a map. A pipeline has few constants.
+fn constant_named<'a>(constants: &'a PipelineConstants, key: &str) -> Option<&'a f64> {
+    constants
+        .iter()
+        .find(|(name, _)| name.as_str() == key)
+        .map(|(_, value)| value)
+}
+
 /// Add a [`Constant`] to `module` for the override `old_h`.
 ///
 /// Add the new `Constant` to `override_map` and `adjusted_constant_initializers`.
@@ -374,7 +387,7 @@ fn process_override(
     // Generate a global expression for `r#override`'s value, either
     // from the provided `pipeline_constants` table or its initializer
     // in the module.
-    let init = if let Some(value) = pipeline_constants.get::<str>(&key) {
+    let init = if let Some(value) = constant_named(pipeline_constants, &key) {
         let literal = match module.types[r#override.ty].inner {
             TypeInner::Scalar(scalar) => map_value_to_literal(*value, scalar)?,
             _ => unreachable!(),
